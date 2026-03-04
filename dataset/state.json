@@ -1,0 +1,24 @@
+{
+  "_data_files": [
+    {
+      "filename": "data-00000-of-00001.arrow"
+    }
+  ],
+  "_fingerprint": "5f992f6ba28bcd68",
+  "_format_columns": [
+    "ego_image",
+    "global_image",
+    "prompt",
+    "action",
+    "action_id",
+    "episode_id",
+    "step",
+    "env_size",
+    "agent_pos",
+    "agent_dir"
+  ],
+  "_format_kwargs": {},
+  "_format_type": null,
+  "_output_all_columns": false,
+  "_split": null
+}

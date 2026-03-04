@@ -1,0 +1,46 @@
+{
+  "citation": "",
+  "description": "",
+  "features": {
+    "ego_image": {
+      "_type": "Image"
+    },
+    "global_image": {
+      "_type": "Image"
+    },
+    "prompt": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "action": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "action_id": {
+      "dtype": "int64",
+      "_type": "Value"
+    },
+    "episode_id": {
+      "dtype": "int64",
+      "_type": "Value"
+    },
+    "step": {
+      "dtype": "int64",
+      "_type": "Value"
+    },
+    "env_size": {
+      "dtype": "int64",
+      "_type": "Value"
+    },
+    "agent_pos": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "agent_dir": {
+      "dtype": "int64",
+      "_type": "Value"
+    }
+  },
+  "homepage": "",
+  "license": ""
+}
