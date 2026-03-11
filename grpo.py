@@ -24,14 +24,14 @@ from nanoVLM.models.vision_language_model import VisionLanguageModel
 
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
-OUTPUT_DIR = "checkpoints/cgrpo_action_adapter"
+OUTPUT_DIR = "checkpoints/grpo_action_adapter"
 SFT_ADAPTER_PATH = "checkpoints/sft_adapter"
-DATASET_PATH = "minigrid_dataset"
+DATASET_PATH = "dataset"
 ENV_SIZE = 8
 TILE_SIZE = 32
 
 G = 4
-EPISODES = 1
+EPISODES = 100
 MAX_STEPS = 25
 LR = 5e-6
 EPSILON = 0.2
