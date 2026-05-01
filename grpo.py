@@ -1,7 +1,5 @@
 import os
 import sys
-import inspect
-import types
 import random
 
 import torch
@@ -11,8 +9,8 @@ import wandb
 from tqdm import tqdm
 
 from datasets import load_from_disk
-from transformers import AutoTokenizer, AutoImageProcessor, GenerationConfig
-from peft import LoraConfig, get_peft_model, PeftModel
+from transformers import GenerationConfig
+from peft import LoraConfig, get_peft_model
 from bitsandbytes.optim import AdamW8bit
 
 from minigrid.wrappers import RGBImgPartialObsWrapper
@@ -20,6 +18,7 @@ from minigrid.core.world_object import Goal
 
 sys.path.append("./nanoVLM")
 from nanoVLM.models.vision_language_model import VisionLanguageModel
+from model_utils import load_vlm_model
 
 
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
@@ -43,31 +42,15 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 if USE_WANDB:
     wandb.init(project="nanoVLM-minigrid", name="grpo-action-direct")
 
-def dummy_create_or_update_model_card(self, save_directory):
-    return
+BASE_MODEL_ID = "lusxvr/nanoVLM-222M"
 
-PeftModel.create_or_update_model_card = dummy_create_or_update_model_card
+ref_model, tokenizer, image_processor = load_vlm_model(
+    BASE_MODEL_ID, SFT_ADAPTER_PATH, DEVICE, is_trainable=False
+)
 
-tokenizer = AutoTokenizer.from_pretrained(SFT_ADAPTER_PATH)
-image_processor = AutoImageProcessor.from_pretrained(SFT_ADAPTER_PATH)
-
-base_model_ref = VisionLanguageModel.from_pretrained("lusxvr/nanoVLM-222M")
-base_model_ref.prepare_inputs_for_generation = lambda *args, **kwargs: kwargs
-base_model_ref.config = getattr(base_model_ref, "cfg", type('Config', (), {})) 
-base_model_ref.config.model_type = "nanovlm"
-
-ref_model = PeftModel.from_pretrained(base_model_ref, SFT_ADAPTER_PATH)
-ref_model = ref_model.merge_and_unload().to(DEVICE).eval()
-for param in ref_model.parameters():
-    param.requires_grad = False
-
-base_model_active = VisionLanguageModel.from_pretrained("lusxvr/nanoVLM-222M")
-base_model_active.prepare_inputs_for_generation = lambda *args, **kwargs: kwargs
-base_model_active.config = getattr(base_model_active, "cfg", type('Config', (), {})) 
-base_model_active.config.model_type = "nanovlm"
-
-active_model = PeftModel.from_pretrained(base_model_active, SFT_ADAPTER_PATH)
-active_model = active_model.merge_and_unload()
+active_model, _, _ = load_vlm_model(
+    BASE_MODEL_ID, SFT_ADAPTER_PATH, DEVICE, is_trainable=True
+)
 
 lora_config = LoraConfig(
     r=32, 
@@ -78,27 +61,6 @@ lora_config = LoraConfig(
     task_type="CAUSAL_LM"
 )
 
-def patch_model(m):
-    m.prepare_inputs_for_generation = lambda *args, **kwargs: kwargs
-    m.config = getattr(m, "cfg", type('Config', (), {})) 
-    m.config.model_type = "nanovlm"
-    m.original_forward = m.forward
-
-    def patched_forward(self, **kwargs):
-        sig = inspect.signature(self.original_forward)
-        accepted_keys = list(sig.parameters.keys())
-
-        if 'pixel_values' in kwargs:
-            if 'images' in accepted_keys: kwargs['images'] = kwargs.pop('pixel_values')
-            elif 'image' in accepted_keys: kwargs['image'] = kwargs.pop('pixel_values')
-        
-        filtered_kwargs = {k: v for k, v in kwargs.items() if k in accepted_keys}
-        return self.original_forward(**filtered_kwargs)
-    m.forward = types.MethodType(patched_forward, m)
-
-patch_model(ref_model)
-patch_model(active_model)
-
 active_model = get_peft_model(active_model, lora_config).to(DEVICE)
 active_model.train()
 
@@ -107,7 +69,6 @@ optimizer = AdamW8bit(active_model.parameters(), lr=LR)
 action_texts = ["left", "right", "forward"]
 action_ids_list = [tokenizer.encode(a, add_special_tokens=False) for a in action_texts]
 
-action_single_ids = None
 if all(len(ids) == 1 for ids in action_ids_list):
     action_single_ids = [ids[0] for ids in action_ids_list]
 
@@ -237,11 +198,7 @@ split_ds = full_ds.train_test_split(test_size=0.1, seed=42)
 train_ds = split_ds["train"]
 val_ds = split_ds["test"]
 
-prompt = (
-    "You are a robot in a 2D grid world. You see a 7x7 partial RGB view in front of you.\n"
-    "Your mission: get to the green goal square as quickly as possible.\n"
-    "Choose the next action: left, right or forward."
-)
+prompt = full_ds[0]["prompt"]
 
 # GRPO
 global_step = 0
