@@ -113,42 +113,15 @@ if all(len(ids) == 1 for ids in action_ids_list):
 
 def get_logits(model, input_ids, pixel_values, attention_mask=None):
     outputs = model(input_ids=input_ids, pixel_values=pixel_values, attention_mask=attention_mask)
-    
-    if hasattr(outputs, "logits"):
-        logits = outputs.logits
-    elif isinstance(outputs, tuple):
-        logits = outputs[1] if outputs[0].dim() == 0 else outputs[0]
-    else:
-        logits = outputs
-        
-    if logits.size(-1) == 576:
-        head = None
-        if hasattr(model, "decoder") and hasattr(model.decoder, "head"):
-            head = model.decoder.head
-        elif hasattr(model, "base_model") and hasattr(model.base_model.model, "decoder"):
-            head = model.base_model.model.decoder.head
-        elif hasattr(model, "base_model") and hasattr(model.base_model.model.base_model, "decoder"):
-            head = model.base_model.model.base_model.decoder.head
-        
-        if head is not None:
-            logits = head(logits)
-        else:
-            outputs = model(
-                input_ids=input_ids, pixel_values=pixel_values, 
-                attention_mask=attention_mask, labels=input_ids
-            )
-            if hasattr(outputs, "logits"):
-                logits = outputs.logits
-            elif isinstance(outputs, tuple):
-                logits = outputs[1] if outputs[0].dim() == 0 else outputs[0]
-            else:
-                logits = outputs
+    logits = outputs[1] if outputs[0].dim() == 0 else outputs[0]
+    head = model.decoder.head
+    logits = head(logits)
                 
     return logits
 
 def get_vocab_last_logits(model, input_ids, pixel_values, attention_mask=None):
     logits = get_logits(model, input_ids, pixel_values, attention_mask)
-    return logits[0, -1, :]  # (vocab_size,)
+    return logits[0, -1, :]
 
 def seq_logprob_given_prefix(model, tokenizer, input_ids_prefix, pixel_values, action_token_ids):
     device = next(model.parameters()).device
@@ -206,15 +179,16 @@ def create_env():
     env = gym.make(f"MiniGrid-Empty-{ENV_SIZE}x{ENV_SIZE}-v0", render_mode="rgb_array")
     return RGBImgPartialObsWrapper(env, tile_size=TILE_SIZE)
 
-def evaluate_accuracy(model, dataset, num_samples=100):
+def evaluate_accuracy(model, dataset, num_samples=100, seed=42):
     model.eval()
+    rng = random.Random(seed)
     correct = 0
     
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     model.generation_config = GenerationConfig()
 
     eval_size = min(len(dataset), num_samples)
-    indices = random.sample(range(len(dataset)), eval_size)
+    indices = rng.sample(range(len(dataset)), eval_size)
     
     for idx in tqdm(indices, desc="Оценка Accuracy"):
         item = dataset[idx]
@@ -279,11 +253,13 @@ for episode in range(EPISODES):
     group_trajectories = []
     group_returns = []
 
+    if episode % 25 == 0:
+        val_acc = evaluate_accuracy(active_model, val_ds, num_samples=100)
+        print(f"Validation Accuracy: {val_acc:.4f}")
+
     for g in range(G):
         obs, _ = env.reset(seed=seed)
         unwrapped = env.unwrapped
-        ego_img = obs["image"]
-        action_logits, input_ids, pixel_values = get_action_distribution(ref_model, tokenizer, ego_img, prompt)
         
         unwrapped.place_agent()
         for x in range(unwrapped.grid.width):
@@ -293,6 +269,8 @@ for episode in range(EPISODES):
                     unwrapped.grid.set(x, y, None)
         unwrapped.place_obj(Goal())
         obs = env.observation(unwrapped.gen_obs())
+        ego_img = obs["image"]
+        action_logits, input_ids, pixel_values = get_action_distribution(ref_model, tokenizer, ego_img, prompt)
 
         trajectory = []
         episode_reward = 0.0
@@ -394,13 +372,11 @@ for episode in range(EPISODES):
 
     optimizer.step()
 
-    if episode % 25 == 0:
-        print(f"Запуск оценки Accuracy...")
-        val_acc = evaluate_accuracy(active_model, val_ds, num_samples=100)
-        print(f"Validation Accuracy: {val_acc:.4f}")
-    
     if USE_WANDB:
         wandb.log({"train/grpo_loss": loss_total / steps_count})
+
+val_acc = evaluate_accuracy(active_model, val_ds, num_samples=100)
+print(f"Validation Accuracy: {val_acc:.4f}")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 active_model.save_pretrained(OUTPUT_DIR)
