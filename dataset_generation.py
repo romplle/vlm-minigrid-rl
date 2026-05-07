@@ -93,10 +93,6 @@ def main():
         if not path:
             continue
 
-        if episode < 5:
-            print(f"[DEBUG] ep={episode} | agent={unwrapped.agent_pos} dir={unwrapped.agent_dir} "
-                  f"| goal={unwrapped.goal_pos if hasattr(unwrapped, 'goal_pos') else 'N/A'}")
-
         global_img = env.render()
 
         for step_idx, action in enumerate(path):
@@ -105,7 +101,7 @@ def main():
             prompt = (
                 "You are a robot in a 2D grid world. You see a 7x7 partial RGB view in front of you.\n"
                 "Your mission: get to the green goal square as quickly as possible.\n"
-                "Choose the next action: left, right or forward."
+                "Choose the next action: forward, left or right."
             )
 
             action_map = {0: "left", 1: "right", 2: "forward"}
