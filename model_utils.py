@@ -18,8 +18,7 @@ def patch_nanovlm(m):
         sig = inspect.signature(self.original_forward)
         accepted_keys = list(sig.parameters.keys())
         
-        if 'pixel_values' in kwargs:
-            kwargs['image'] = kwargs.pop('pixel_values')
+        kwargs['image'] = kwargs.pop('pixel_values')
             
         filtered_kwargs = {k: v for k, v in kwargs.items() if k in accepted_keys}
         return self.original_forward(**filtered_kwargs)
