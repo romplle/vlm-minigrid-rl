@@ -53,20 +53,9 @@ model.original_forward = model.forward
 def patched_forward(self, **kwargs):
     sig = inspect.signature(self.original_forward)
     accepted_keys = list(sig.parameters.keys())
-    
-    if 'pixel_values' in kwargs:
-        if 'images' in accepted_keys: 
-            kwargs['images'] = kwargs.pop('pixel_values')
-        elif 'image' in accepted_keys: 
-            kwargs['image'] = kwargs.pop('pixel_values')
-        elif 'images_tensor' in accepted_keys: 
-            kwargs['images_tensor'] = kwargs.pop('pixel_values')
-            
-    if 'labels' in kwargs:
-        if 'targets' in accepted_keys: 
-            kwargs['targets'] = kwargs.pop('labels')
-        elif 'labels' in accepted_keys: 
-            pass
+
+    kwargs['image'] = kwargs.pop('pixel_values')
+    kwargs['targets'] = kwargs.pop('labels')
 
     filtered_kwargs = {k: v for k, v in kwargs.items() if k in accepted_keys}
     return self.original_forward(**filtered_kwargs)
@@ -77,8 +66,8 @@ model = prepare_model_for_kbit_training(model)
 lora_config = LoraConfig(
     r=64,
     lora_alpha=64,
-    target_modules=["q_proj", "k_proj", "v_proj", "out_proj"], 
-    lora_dropout=0.1,
+    target_modules=["q_proj", "k_proj", "v_proj", "out_proj"],
+    lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM"
 )

@@ -1,20 +1,5 @@
 {
-  "_valid_processor_keys": [
-    "images",
-    "do_resize",
-    "size",
-    "resample",
-    "do_rescale",
-    "rescale_factor",
-    "do_normalize",
-    "image_mean",
-    "image_std",
-    "return_tensors",
-    "data_format",
-    "input_data_format",
-    "do_convert_rgb"
-  ],
-  "do_convert_rgb": null,
+  "do_convert_rgb": true,
   "do_normalize": true,
   "do_rescale": true,
   "do_resize": true,
@@ -29,7 +14,6 @@
     0.5,
     0.5
   ],
-  "processor_class": "SiglipProcessor",
   "resample": 3,
   "rescale_factor": 0.00392156862745098,
   "size": {
