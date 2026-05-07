@@ -21,18 +21,16 @@ from nanoVLM.models.vision_language_model import VisionLanguageModel
 from model_utils import load_vlm_model
 
 
-os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-
-OUTPUT_DIR = "checkpoints/grpo_action_adapter"
+OUTPUT_DIR = "checkpoints/grpo_adapter"
 SFT_ADAPTER_PATH = "checkpoints/sft_adapter"
 DATASET_PATH = "dataset"
 ENV_SIZE = 8
 TILE_SIZE = 32
 
-G = 4
+G = 16
 EPISODES = 100
-MAX_STEPS = 25
-LR = 5e-6
+MAX_STEPS = 12
+LR = 2e-5
 EPSILON = 0.2
 BETA = 0.05
 USE_WANDB = True
@@ -40,7 +38,7 @@ USE_WANDB = True
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 if USE_WANDB:
-    wandb.init(project="nanoVLM-minigrid", name="grpo-action-direct")
+    wandb.init(project="nanoVLM-minigrid", name="grpo")
 
 BASE_MODEL_ID = "lusxvr/nanoVLM-222M"
 
@@ -53,8 +51,8 @@ active_model, _, _ = load_vlm_model(
 )
 
 lora_config = LoraConfig(
-    r=32, 
-    lora_alpha=32, 
+    r=64, 
+    lora_alpha=64, 
     target_modules=["q_proj", "k_proj", "v_proj", "out_proj"], 
     lora_dropout=0.05, 
     bias="none", 
@@ -69,8 +67,16 @@ optimizer = AdamW8bit(active_model.parameters(), lr=LR)
 action_texts = ["left", "right", "forward"]
 action_ids_list = [tokenizer.encode(a, add_special_tokens=False) for a in action_texts]
 
+full_ds = load_from_disk(DATASET_PATH)
+split_ds = full_ds.train_test_split(test_size=0.1, seed=42)
+train_ds = split_ds["train"]
+val_ds = split_ds["test"]
+
+prompt = full_ds[0]["prompt"]
+
 if all(len(ids) == 1 for ids in action_ids_list):
     action_single_ids = [ids[0] for ids in action_ids_list]
+
 
 def get_logits(model, input_ids, pixel_values, attention_mask=None):
     outputs = model(input_ids=input_ids, pixel_values=pixel_values, attention_mask=attention_mask)
@@ -80,9 +86,11 @@ def get_logits(model, input_ids, pixel_values, attention_mask=None):
                 
     return logits
 
+
 def get_vocab_last_logits(model, input_ids, pixel_values, attention_mask=None):
     logits = get_logits(model, input_ids, pixel_values, attention_mask)
     return logits[0, -1, :]
+
 
 def seq_logprob_given_prefix(model, tokenizer, input_ids_prefix, pixel_values, action_token_ids):
     device = next(model.parameters()).device
@@ -103,6 +111,7 @@ def seq_logprob_given_prefix(model, tokenizer, input_ids_prefix, pixel_values, a
         tok = action[0, k]
         total = total + log_probs[0, label_pos - 1, tok]
     return total
+
 
 def get_action_distribution(model, tokenizer, ego_image, prompt):
     text = f"User: <image>\n{prompt}\nAssistant: "
@@ -136,9 +145,11 @@ def get_action_distribution(model, tokenizer, ego_image, prompt):
     action_logits = torch.stack(action_logits)
     return action_logits, input_ids, pixel_values
 
+
 def create_env():
     env = gym.make(f"MiniGrid-Empty-{ENV_SIZE}x{ENV_SIZE}-v0", render_mode="rgb_array")
     return RGBImgPartialObsWrapper(env, tile_size=TILE_SIZE)
+
 
 def evaluate_accuracy(model, dataset, num_samples=100, seed=42):
     model.eval()
@@ -192,13 +203,6 @@ def evaluate_accuracy(model, dataset, num_samples=100, seed=42):
     model.train()
     return correct / eval_size
 
-full_ds = load_from_disk(DATASET_PATH)
-
-split_ds = full_ds.train_test_split(test_size=0.1, seed=42)
-train_ds = split_ds["train"]
-val_ds = split_ds["test"]
-
-prompt = full_ds[0]["prompt"]
 
 # GRPO
 global_step = 0
@@ -226,8 +230,6 @@ for episode in range(EPISODES):
                     unwrapped.grid.set(x, y, None)
         unwrapped.place_obj(Goal())
         obs = env.observation(unwrapped.gen_obs())
-        ego_img = obs["image"]
-        action_logits, input_ids, pixel_values = get_action_distribution(ref_model, tokenizer, ego_img, prompt)
 
         trajectory = []
         episode_reward = 0.0
@@ -285,12 +287,17 @@ for episode in range(EPISODES):
     print(f"Ep {episode+1}/{EPISODES} | Mean Return: {mean_return.item():.3f} | Success: {success_rate*100:.1f}%")
 
     optimizer.zero_grad()
-    loss_total = 0.0
-    steps_count = 0
-
+    episode_loss = 0.0
+    
     for g in range(G):
         adv = advantages[g]
-        for step_data in group_trajectories[g]:
+        trajectory = group_trajectories[g]
+        T = len(trajectory)
+        
+        if T == 0: 
+            continue
+            
+        for step_data in trajectory:
             input_ids = step_data["input_ids"]
             pixel_values = step_data["pixel_values"]
             action_idx = step_data["action_idx"]
@@ -321,16 +328,18 @@ for episode in range(EPISODES):
             
             kl = torch.exp(ref_log_prob - new_log_prob) - (ref_log_prob - new_log_prob) - 1.0
 
-            loss = - (torch.min(surr1, surr2) - BETA * kl)
-            loss.backward()
+            step_loss = - (torch.min(surr1, surr2) - BETA * kl)
             
-            loss_total += loss.item()
-            steps_count += 1
-
+            final_step_loss = step_loss / T / G
+            
+            final_step_loss.backward()
+            
+            episode_loss += final_step_loss.item()
+        
     optimizer.step()
 
     if USE_WANDB:
-        wandb.log({"train/grpo_loss": loss_total / steps_count})
+        wandb.log({"train/grpo_loss": episode_loss, "episode": episode})
 
 val_acc = evaluate_accuracy(active_model, val_ds, num_samples=100)
 print(f"Validation Accuracy: {val_acc:.4f}")
