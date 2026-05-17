@@ -1,4 +1,6 @@
 from collections import deque
+import shutil
+from pathlib import Path
 
 import gymnasium as gym
 import numpy as np
@@ -16,7 +18,11 @@ SEED_BASE = 42
 SAVE_PATH = "dataset"
 
 
-def get_shortest_path_actions(env):
+def turn_balance(actions):
+    return actions.count(0) - actions.count(1)
+
+
+def get_shortest_path_actions(env, action_order=(0, 1, 2)):
     grid = env.unwrapped.grid
     agent_pos = tuple(env.unwrapped.agent_pos)
     agent_dir = env.unwrapped.agent_dir
@@ -42,7 +48,7 @@ def get_shortest_path_actions(env):
         (x, y, d), path = queue.popleft()
         if (x, y) == goal_pos:
             return path
-        for a in range(3):
+        for a in action_order:
             nx, ny, nd = x, y, d
             if a == 0:
                 nd = (d - 1) % 4
@@ -72,6 +78,7 @@ def main():
     wrapper = RGBImgPartialObsWrapper(env, tile_size=TILE_SIZE)
 
     data = []
+    action_balance = 0
 
     for episode in tqdm(range(NUM_EPISODES), desc="Генерация траекторий"):
         seed = SEED_BASE + episode
@@ -89,7 +96,21 @@ def main():
         unwrapped.place_obj(Goal())
         obs = wrapper.observation(unwrapped.gen_obs())
 
-        path = get_shortest_path_actions(wrapper)
+        # BFS can find multiple equally short paths. A fixed left-first order
+        # biases the expert dataset, so compare left/right tie-breaks and keep
+        # the shortest path that reduces the cumulative left/right imbalance.
+        candidate_paths = [
+            get_shortest_path_actions(wrapper, action_order=(0, 1, 2)),
+            get_shortest_path_actions(wrapper, action_order=(1, 0, 2)),
+        ]
+        candidate_paths = [candidate for candidate in candidate_paths if candidate]
+        if not candidate_paths:
+            continue
+        path = min(
+            candidate_paths,
+            key=lambda candidate: (abs(action_balance + turn_balance(candidate)), turn_balance(candidate)),
+        )
+        action_balance += turn_balance(path)
         if not path:
             continue
 
@@ -144,8 +165,16 @@ def main():
 
     dataset = Dataset.from_list(data)
     dataset = dataset.cast(features)
-    dataset.save_to_disk(SAVE_PATH)
-    print(f"Датасет сохранён → {SAVE_PATH}")
+
+    save_path = Path(SAVE_PATH)
+    tmp_path = save_path.with_name(f"{save_path.name}.tmp")
+    if tmp_path.exists():
+        shutil.rmtree(tmp_path)
+    dataset.save_to_disk(str(tmp_path))
+    if save_path.exists():
+        shutil.rmtree(save_path)
+    tmp_path.replace(save_path)
+    print(f"Датасет сохранён: {save_path}")
 
 
 if __name__ == "__main__":
