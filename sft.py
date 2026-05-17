@@ -15,6 +15,7 @@ from transformers import AutoTokenizer, AutoImageProcessor, GenerationConfig
 
 sys.path.append("./nanoVLM")
 from nanoVLM.models.vision_language_model import VisionLanguageModel
+from training_utils import majority_action_baseline, parse_action, set_global_seed, split_dataset_by_episode
 
 
 def dummy_create_or_update_model_card(self, save_directory):
@@ -35,9 +36,13 @@ MAX_SEQ_LEN = 256
 IMAGE_TOKEN = "<image>"
 USE_WANDB = True
 VAL_SAMPLES = 100
+SEED = 42
+VAL_SPLIT = 0.1
+
+set_global_seed(SEED)
 
 if USE_WANDB:
-    wandb.init(project="nanoVLM-minigrid", name="sft")
+    wandb.init(project="nanoVLM-minigrid", name="sft_new")
 
 tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_ID)
 tokenizer.pad_token = tokenizer.eos_token
@@ -82,11 +87,16 @@ image_processor = AutoImageProcessor.from_pretrained("google/siglip-base-patch16
 
 full_ds = load_from_disk(DATASET_PATH)
 
-split_ds = full_ds.train_test_split(test_size=0.1, seed=42)
-train_ds = split_ds["train"]
-val_ds = split_ds["test"]
+train_ds, val_ds, val_episodes = split_dataset_by_episode(full_ds, test_size=VAL_SPLIT, seed=SEED)
+majority_baseline = majority_action_baseline(train_ds, val_ds)
 
 print(f"Размер train: {len(train_ds)}, Размер val: {len(val_ds)}")
+print(f"Episode-level split: train episodes={len(set(train_ds['episode_id']))}, val episodes={len(val_episodes)}")
+print(
+    "Majority baseline: "
+    f"{majority_baseline['action']} -> {majority_baseline['accuracy']:.4f} "
+    f"on validation"
+)
 
 def collate_fn(batch):
     images = []
@@ -99,22 +109,21 @@ def collate_fn(batch):
     prompts = [item["prompt"] for item in batch]
     actions = [str(item["action"]) for item in batch] 
 
-    conversations = []
+    full_texts = []
+    prefix_texts = []
     for prompt, action in zip(prompts, actions):
-        conv = [
-            {"role": "user", "content": f"{IMAGE_TOKEN}\n{prompt}"},
-            {"role": "assistant", "content": action}
-        ]
-        conversations.append(conv)
-
-    texts = tokenizer.apply_chat_template(conversations, tokenize=False, add_generation_prompt=False)
+        prefix = f"User: {IMAGE_TOKEN}\n{prompt}\nAssistant:"
+        full_text = f"{prefix} {action}{tokenizer.eos_token}"
+        prefix_texts.append(prefix)
+        full_texts.append(full_text)
 
     tokenized = tokenizer(
-        texts,
+        full_texts,
         return_tensors="pt",
         padding=True,
         truncation=True,
-        max_length=MAX_SEQ_LEN
+        max_length=MAX_SEQ_LEN,
+        add_special_tokens=False,
     )
 
     processed = image_processor(
@@ -130,6 +139,14 @@ def collate_fn(batch):
         pixel_values = pixel_values.unsqueeze(0)
 
     labels = tokenized["input_ids"].clone()
+    for row_idx, prefix in enumerate(prefix_texts):
+        prefix_ids = tokenizer(
+            prefix,
+            add_special_tokens=False,
+            truncation=True,
+            max_length=MAX_SEQ_LEN,
+        )["input_ids"]
+        labels[row_idx, : min(len(prefix_ids), labels.size(1))] = -100
     labels[labels == tokenizer.pad_token_id] = -100
 
     return {
@@ -141,15 +158,17 @@ def collate_fn(batch):
 
 train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
 
-def evaluate_accuracy(model, dataset, num_samples=100):
+def evaluate_accuracy(model, dataset, num_samples=100, seed=SEED):
+    was_training = model.training
     model.eval()
     correct = 0
+    rng = random.Random(seed)
     
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     model.generation_config = GenerationConfig()
 
     eval_size = min(len(dataset), num_samples)
-    indices = random.sample(range(len(dataset)), eval_size)
+    indices = rng.sample(range(len(dataset)), eval_size)
     
     for idx in tqdm(indices, desc="Оценка Accuracy"):
         item = dataset[idx]
@@ -177,19 +196,12 @@ def evaluate_accuracy(model, dataset, num_samples=100):
             )
 
         generated_text = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip().lower()
-
-        pred_action = None
-        if "left" in generated_text:
-            pred_action = "left"
-        elif "right" in generated_text:
-            pred_action = "right"
-        elif "forward" in generated_text:
-            pred_action = "forward"
-            
+        pred_action, _ = parse_action(generated_text)
         if pred_action == true_action:
             correct += 1
 
-    model.train()
+    if was_training:
+        model.train()
     return correct / eval_size
 
 optimizer = AdamW8bit(model.parameters(), lr=LR, weight_decay=0.01)
