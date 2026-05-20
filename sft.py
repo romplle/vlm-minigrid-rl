@@ -3,6 +3,7 @@ import sys
 import inspect
 import types
 import random
+import argparse
 
 import torch
 import wandb
@@ -25,8 +26,8 @@ PeftModel.create_or_update_model_card = dummy_create_or_update_model_card
 
 MODEL_ID = "lusxvr/nanoVLM-222M"
 TOKENIZER_ID = "HuggingFaceTB/SmolLM2-135M" 
-DATASET_PATH = "dataset"
-OUTPUT_DIR = "checkpoints/sft_adapter"
+DATASET_PATH = "datasets/dataset_8x8"
+OUTPUT_DIR = "checkpoints/sft_adapter_8x8"
 
 BATCH_SIZE = 6
 GRAD_ACCUM = 8 
@@ -39,10 +40,43 @@ VAL_SAMPLES = 100
 SEED = 42
 VAL_SPLIT = 0.1
 
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train NanoVLM with SFT on MiniGrid expert data.")
+    parser.add_argument("--env-size", type=int, default=8, choices=[8, 16])
+    parser.add_argument("--dataset-path", default=None)
+    parser.add_argument("--output-dir", default=None)
+    parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument("--val-split", type=float, default=None)
+    parser.add_argument("--val-samples", type=int, default=VAL_SAMPLES)
+    parser.add_argument("--lr", type=float, default=LR)
+    parser.add_argument("--wandb-name", default=None)
+    parser.add_argument("--no-wandb", action="store_true")
+    return parser.parse_args()
+
+
+def default_dataset_path(env_size):
+    return f"datasets/dataset_{env_size}x{env_size}"
+
+
+def default_output_dir(env_size):
+    return f"checkpoints/sft_adapter_{env_size}x{env_size}"
+
+
+args = parse_args()
+experiment_name = f"{args.env_size}x{args.env_size}"
+DATASET_PATH = args.dataset_path or default_dataset_path(args.env_size)
+OUTPUT_DIR = args.output_dir or default_output_dir(args.env_size)
+EPOCHS = args.epochs if args.epochs is not None else EPOCHS
+VAL_SPLIT = args.val_split if args.val_split is not None else VAL_SPLIT
+VAL_SAMPLES = args.val_samples
+LR = args.lr
+USE_WANDB = USE_WANDB and not args.no_wandb
+
 set_global_seed(SEED)
 
 if USE_WANDB:
-    wandb.init(project="nanoVLM-minigrid", name="sft_new")
+    wandb.init(project="nanoVLM-minigrid", name=args.wandb_name or f"sft-{experiment_name}")
 
 tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_ID)
 tokenizer.pad_token = tokenizer.eos_token

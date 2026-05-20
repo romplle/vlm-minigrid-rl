@@ -1,6 +1,7 @@
 import os
 import sys
 import random
+import argparse
 
 import torch
 import torch.nn.functional as F
@@ -24,7 +25,7 @@ from training_utils import majority_action_baseline, parse_action, set_global_se
 
 OUTPUT_DIR = "checkpoints/grpo_adapter_8x8"
 SFT_ADAPTER_PATH = "checkpoints/sft_adapter_8x8"
-DATASET_PATH = "dataset"
+DATASET_PATH = "datasets/dataset_8x8"
 ENV_SIZE = 8
 TILE_SIZE = 32
 
@@ -39,11 +40,60 @@ USE_WANDB = True
 SEED = 42
 VAL_SPLIT = 0.1
 
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train NanoVLM with GRPO-style RL in MiniGrid.")
+    parser.add_argument("--env-size", type=int, default=8, choices=[8, 16])
+    parser.add_argument("--dataset-path", default=None)
+    parser.add_argument("--sft-adapter-path", default=None)
+    parser.add_argument("--output-dir", default=None)
+    parser.add_argument("--episodes", type=int, default=EPISODES)
+    parser.add_argument("--checkpoint-interval", type=int, default=CHECKPOINT_INTERVAL)
+    parser.add_argument("--max-steps", type=int, default=None)
+    parser.add_argument("--val-split", type=float, default=VAL_SPLIT)
+    parser.add_argument("--lr", type=float, default=LR)
+    parser.add_argument("--epsilon", type=float, default=EPSILON)
+    parser.add_argument("--beta", type=float, default=BETA)
+    parser.add_argument("--wandb-name", default=None)
+    parser.add_argument("--no-wandb", action="store_true")
+    return parser.parse_args()
+
+
+def default_dataset_path(env_size):
+    return f"datasets/dataset_{env_size}x{env_size}"
+
+
+def default_sft_adapter_path(env_size):
+    return f"checkpoints/sft_adapter_{env_size}x{env_size}"
+
+
+def default_grpo_adapter_path(env_size):
+    return f"checkpoints/grpo_adapter_{env_size}x{env_size}"
+
+
+def default_max_steps(env_size):
+    return 12 if env_size == 8 else 40
+
+
+args = parse_args()
+ENV_SIZE = args.env_size
+DATASET_PATH = args.dataset_path or default_dataset_path(ENV_SIZE)
+SFT_ADAPTER_PATH = args.sft_adapter_path or default_sft_adapter_path(ENV_SIZE)
+OUTPUT_DIR = args.output_dir or default_grpo_adapter_path(ENV_SIZE)
+EPISODES = args.episodes
+CHECKPOINT_INTERVAL = args.checkpoint_interval
+MAX_STEPS = args.max_steps if args.max_steps is not None else default_max_steps(ENV_SIZE)
+VAL_SPLIT = args.val_split
+LR = args.lr
+EPSILON = args.epsilon
+BETA = args.beta
+USE_WANDB = USE_WANDB and not args.no_wandb
+
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 set_global_seed(SEED)
 
 if USE_WANDB:
-    wandb.init(project="nanoVLM-minigrid", name="grpo")
+    wandb.init(project="nanoVLM-minigrid", name=args.wandb_name or f"grpo-{ENV_SIZE}x{ENV_SIZE}")
 
 BASE_MODEL_ID = "lusxvr/nanoVLM-222M"
 

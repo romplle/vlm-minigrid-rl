@@ -1,3 +1,4 @@
+import argparse
 from collections import deque
 import shutil
 from pathlib import Path
@@ -15,7 +16,21 @@ ENV_SIZE = 8
 NUM_EPISODES = 1000
 TILE_SIZE = 32
 SEED_BASE = 42
-SAVE_PATH = "dataset"
+SAVE_PATH = "datasets/dataset_8x8"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Generate MiniGrid expert trajectories.")
+    parser.add_argument("--env-size", type=int, default=8, choices=[8, 16])
+    parser.add_argument("--num-episodes", type=int, default=NUM_EPISODES)
+    parser.add_argument("--tile-size", type=int, default=TILE_SIZE)
+    parser.add_argument("--seed-base", type=int, default=SEED_BASE)
+    parser.add_argument("--save-path", default=None)
+    return parser.parse_args()
+
+
+def default_dataset_path(env_size):
+    return f"datasets/dataset_{env_size}x{env_size}"
 
 
 def turn_balance(actions):
@@ -71,17 +86,20 @@ def get_shortest_path_actions(env, action_order=(0, 1, 2)):
 
 
 def main():
-    env_id = f"MiniGrid-Empty-{ENV_SIZE}x{ENV_SIZE}-v0"
+    args = parse_args()
+    env_size = args.env_size
+    save_path = Path(args.save_path or default_dataset_path(env_size))
+    env_id = f"MiniGrid-Empty-{env_size}x{env_size}-v0"
     print(f"Создаём датасет: {env_id}")
 
     env = gym.make(env_id, render_mode="rgb_array")
-    wrapper = RGBImgPartialObsWrapper(env, tile_size=TILE_SIZE)
+    wrapper = RGBImgPartialObsWrapper(env, tile_size=args.tile_size)
 
     data = []
     action_balance = 0
 
-    for episode in tqdm(range(NUM_EPISODES), desc="Генерация траекторий"):
-        seed = SEED_BASE + episode
+    for episode in tqdm(range(args.num_episodes), desc="Генерация траекторий"):
+        seed = args.seed_base + episode
         obs, _ = wrapper.reset(seed=seed)
         unwrapped = wrapper.unwrapped
         unwrapped.place_agent()
@@ -96,9 +114,6 @@ def main():
         unwrapped.place_obj(Goal())
         obs = wrapper.observation(unwrapped.gen_obs())
 
-        # BFS can find multiple equally short paths. A fixed left-first order
-        # biases the expert dataset, so compare left/right tie-breaks and keep
-        # the shortest path that reduces the cumulative left/right imbalance.
         candidate_paths = [
             get_shortest_path_actions(wrapper, action_order=(0, 1, 2)),
             get_shortest_path_actions(wrapper, action_order=(1, 0, 2)),
@@ -134,7 +149,7 @@ def main():
                 "action_id": int(action),
                 "episode_id": int(episode),
                 "step": int(step_idx),
-                "env_size": int(ENV_SIZE),
+                "env_size": int(env_size),
                 "agent_pos": str(unwrapped.agent_pos),
                 "agent_dir": int(unwrapped.agent_dir),
             })
@@ -166,7 +181,6 @@ def main():
     dataset = Dataset.from_list(data)
     dataset = dataset.cast(features)
 
-    save_path = Path(SAVE_PATH)
     tmp_path = save_path.with_name(f"{save_path.name}.tmp")
     if tmp_path.exists():
         shutil.rmtree(tmp_path)
