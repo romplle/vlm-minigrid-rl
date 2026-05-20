@@ -4,26 +4,29 @@ import argparse
 
 import torch
 import torch.nn.functional as F
-import gymnasium as gym
 import wandb
-from tqdm import tqdm
 
 from datasets import load_from_disk
-from transformers import GenerationConfig
 from peft import LoraConfig, get_peft_model
 from bitsandbytes.optim import AdamW8bit
-
-from minigrid.wrappers import RGBImgPartialObsWrapper
-from minigrid.core.world_object import Goal
 
 from _bootstrap import bootstrap
 bootstrap()
 
-from vlm_minigrid_rl.model_utils import load_vlm_model
+from vlm_minigrid_rl.minigrid_utils import create_minigrid_env, default_max_steps, reset_env_with_goal
+from vlm_minigrid_rl.model_utils import (
+    action_token_ids,
+    evaluate_action_accuracy,
+    get_action_distribution,
+    load_vlm_model,
+    save_model_bundle,
+    score_action_logits,
+    seq_logprob_given_prefix,
+    single_token_action_ids,
+)
 from vlm_minigrid_rl.paths import project_path
 from vlm_minigrid_rl.training_utils import (
     majority_action_baseline,
-    parse_action,
     set_global_seed,
     split_dataset_by_episode,
 )
@@ -77,10 +80,6 @@ def default_grpo_adapter_path(env_size):
     return f"checkpoints/grpo_adapter_{env_size}x{env_size}"
 
 
-def default_max_steps(env_size):
-    return 12 if env_size == 8 else 40
-
-
 args = parse_args()
 ENV_SIZE = args.env_size
 DATASET_PATH = str(project_path(args.dataset_path or default_dataset_path(ENV_SIZE)))
@@ -125,8 +124,8 @@ active_model.train()
 
 optimizer = AdamW8bit(active_model.parameters(), lr=LR)
 
-action_texts = ["left", "right", "forward"]
-action_ids_list = [tokenizer.encode(a, add_special_tokens=False) for a in action_texts]
+action_ids_list = action_token_ids(tokenizer)
+action_single_ids = single_token_action_ids(action_ids_list)
 
 full_ds = load_from_disk(DATASET_PATH)
 train_ds, val_ds, val_episodes = split_dataset_by_episode(full_ds, test_size=VAL_SPLIT, seed=SEED)
@@ -136,142 +135,15 @@ print(f"Majority baseline on val: {majority_baseline['action']} -> {majority_bas
 
 prompt = full_ds[0]["prompt"]
 
-action_single_ids = None
-if all(len(ids) == 1 for ids in action_ids_list):
-    action_single_ids = [ids[0] for ids in action_ids_list]
-
-
-def get_logits(model, input_ids, pixel_values, attention_mask=None):
-    outputs = model(input_ids=input_ids, pixel_values=pixel_values, attention_mask=attention_mask)
-    logits = outputs[1] if outputs[0].dim() == 0 else outputs[0]
-    head = model.decoder.head
-    logits = head(logits)
-                
-    return logits
-
-
-def get_vocab_last_logits(model, input_ids, pixel_values, attention_mask=None):
-    logits = get_logits(model, input_ids, pixel_values, attention_mask)
-    return logits[0, -1, :]
-
-
-def seq_logprob_given_prefix(model, tokenizer, input_ids_prefix, pixel_values, action_token_ids):
-    device = next(model.parameters()).device
-    prefix = input_ids_prefix.to(device)
-    action = torch.tensor([action_token_ids], dtype=torch.long, device=device)
-    full = torch.cat([prefix, action], dim=1)
-    
-    logits = get_logits(model, full, pixel_values)
-    
-    shift_logits = logits[:, :-1, :].contiguous()
-    log_probs = F.log_softmax(shift_logits, dim=-1)
-    
-    L = prefix.size(1)
-    K = action.size(1)
-    total = torch.tensor(0.0, device=device)
-    for k in range(K):
-        label_pos = L + k
-        tok = action[0, k]
-        total = total + log_probs[0, label_pos - 1, tok]
-    return total
-
-
-def get_action_distribution(model, tokenizer, ego_image, prompt):
-    text = f"User: <image>\n{prompt}\nAssistant: "
-    enc = tokenizer(text, return_tensors="pt")
-    input_ids = enc["input_ids"].to(DEVICE)
-    attention_mask = enc.get("attention_mask", None)
-    if attention_mask is not None:
-        attention_mask = attention_mask.to(DEVICE)
-
-    image_inputs = image_processor(ego_image, return_tensors="pt", do_resize=True, size={"height": 224, "width": 224})
-    pixel_values = image_inputs["pixel_values"].to(torch.float32).to(DEVICE)
-
-    vocab_last = get_vocab_last_logits(model, input_ids, pixel_values, attention_mask=attention_mask)
-    vocab_size = vocab_last.size(0)
-
-    if action_single_ids is not None:
-        max_id = max(action_single_ids)
-        if max_id < vocab_size:
-            aid_tensor = torch.tensor(action_single_ids, dtype=torch.long, device=DEVICE)
-            action_logits = vocab_last.index_select(0, aid_tensor)
-            return action_logits, input_ids, pixel_values
-
-    action_logits = []
-    for txt in action_texts:
-        token_ids = tokenizer.encode(txt, add_special_tokens=False)
-        if len(token_ids) == 0:
-            action_logits.append(torch.tensor(-1e9, device=DEVICE))  
-            continue
-        lp = seq_logprob_given_prefix(model, tokenizer, input_ids, pixel_values, token_ids)
-        action_logits.append(lp.detach())
-    action_logits = torch.stack(action_logits)
-    return action_logits, input_ids, pixel_values
-
-
-def create_env():
-    env = gym.make(f"MiniGrid-Empty-{ENV_SIZE}x{ENV_SIZE}-v0", render_mode="rgb_array")
-    return RGBImgPartialObsWrapper(env, tile_size=TILE_SIZE)
-
-
-def evaluate_accuracy(model, dataset, num_samples=100, seed=SEED):
-    was_training = model.training
-    model.eval()
-    rng = random.Random(seed)
-    correct = 0
-    
-    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-    model.generation_config = GenerationConfig()
-
-    eval_size = min(len(dataset), num_samples)
-    indices = rng.sample(range(len(dataset)), eval_size)
-    
-    for idx in tqdm(indices, desc="Оценка Accuracy"):
-        item = dataset[idx]
-        image = item["ego_image"].convert("RGB")
-        prompt = item["prompt"]
-        true_action = item["action"]
-
-        text = f"User: <image>\n{prompt}\nAssistant: "
-        inputs = tokenizer(text, return_tensors="pt").to(DEVICE)
-        input_ids = inputs["input_ids"]
-
-        image_inputs = image_processor(
-            image, 
-            return_tensors="pt", 
-            do_resize=True, 
-            size={"height": 224, "width": 224},
-        )
-        pixel_values = image_inputs.pixel_values.to(torch.float32).to(DEVICE)
-
-        with torch.no_grad():
-            output_ids = model.generate(
-                input_ids, 
-                pixel_values, 
-                max_new_tokens=1,
-            )
-
-        generated_text = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip().lower()
-        pred_action, _ = parse_action(generated_text)
-        if pred_action == true_action:
-            correct += 1
-
-    if was_training:
-        model.train()
-    return correct / eval_size
-
-
 def save_checkpoint(save_dir):
     os.makedirs(save_dir, exist_ok=True)
-    active_model.save_pretrained(save_dir)
-    tokenizer.save_pretrained(save_dir)
-    image_processor.save_pretrained(save_dir)
+    save_model_bundle(active_model, tokenizer, image_processor, save_dir)
     print(f"Сохранено в {save_dir}")
 
 
 # GRPO
 global_step = 0
-env = create_env()
+env = create_minigrid_env(ENV_SIZE, tile_size=TILE_SIZE)
 rng = random.Random(SEED)
 
 for episode in range(EPISODES):
@@ -281,21 +153,13 @@ for episode in range(EPISODES):
     group_returns = []
 
     if episode % 25 == 0:
-        val_acc = evaluate_accuracy(active_model, val_ds, num_samples=100)
+        val_acc = evaluate_action_accuracy(
+            active_model, tokenizer, image_processor, val_ds, num_samples=100, seed=SEED, device=DEVICE
+        )
         print(f"Validation Accuracy: {val_acc:.4f}")
 
     for g in range(G):
-        obs, _ = env.reset(seed=seed)
-        unwrapped = env.unwrapped
-        
-        unwrapped.place_agent()
-        for x in range(unwrapped.grid.width):
-            for y in range(unwrapped.grid.height):
-                cell = unwrapped.grid.get(x, y)
-                if cell and cell.type == "goal":
-                    unwrapped.grid.set(x, y, None)
-        unwrapped.place_obj(Goal())
-        obs = env.observation(unwrapped.gen_obs())
+        obs = reset_env_with_goal(env, seed)
 
         trajectory = []
         episode_reward = 0.0
@@ -305,19 +169,29 @@ for episode in range(EPISODES):
             
             with torch.no_grad():
                 logits, input_ids, pixel_values = get_action_distribution(
-                    active_model, tokenizer, ego_img, prompt
+                    active_model,
+                    tokenizer,
+                    image_processor,
+                    ego_img,
+                    prompt,
+                    DEVICE,
+                    action_ids_list,
+                    action_single_ids=action_single_ids,
                 )
                 
                 probs = F.softmax(logits, dim=-1)
                 action_idx = torch.multinomial(probs, 1).item()
                 action_log_prob = torch.log(probs[action_idx] + 1e-12)
                 
-                ref_full_logits = get_logits(ref_model, input_ids, pixel_values)
-                ref_vocab_last = ref_full_logits[0, -1, :]
-                
                 if action_single_ids is not None:
-                    aid_tensor = torch.tensor(action_single_ids, dtype=torch.long, device=DEVICE)
-                    ref_action_logits = ref_vocab_last.index_select(0, aid_tensor)
+                    ref_action_logits = score_action_logits(
+                        ref_model,
+                        tokenizer,
+                        input_ids,
+                        pixel_values,
+                        action_ids_list,
+                        action_single_ids=action_single_ids,
+                    )
                     ref_probs = F.softmax(ref_action_logits, dim=-1)
                     ref_log_prob = torch.log(ref_probs[action_idx] + 1e-12)
                 else:
@@ -375,19 +249,14 @@ for episode in range(EPISODES):
             old_log_prob = step_data["old_log_prob"]
             ref_log_prob = step_data["ref_log_prob"]
 
-            logits = get_logits(active_model, input_ids, pixel_values)
-            vocab_last = logits[0, -1, :]
-            
-            if action_single_ids is not None:
-                aid_tensor = torch.tensor(action_single_ids, dtype=torch.long, device=DEVICE)
-                new_action_logits = vocab_last.index_select(0, aid_tensor)
-            else:
-                new_action_logits = []
-                for txt in action_texts:
-                    token_ids = tokenizer.encode(txt, add_special_tokens=False)
-                    lp = seq_logprob_given_prefix(active_model, tokenizer, input_ids, pixel_values, token_ids)
-                    new_action_logits.append(lp)
-                new_action_logits = torch.stack(new_action_logits)
+            new_action_logits = score_action_logits(
+                active_model,
+                tokenizer,
+                input_ids,
+                pixel_values,
+                action_ids_list,
+                action_single_ids=action_single_ids,
+            )
 
             new_probs = F.softmax(new_action_logits, dim=-1)
             new_log_prob = torch.log(new_probs[action_idx] + 1e-12)
@@ -415,7 +284,7 @@ for episode in range(EPISODES):
     if (episode + 1) % CHECKPOINT_INTERVAL == 0:
         save_checkpoint(f"{OUTPUT_DIR}/episode-{episode+1}")
 
-val_acc = evaluate_accuracy(active_model, val_ds, num_samples=100)
+val_acc = evaluate_action_accuracy(active_model, tokenizer, image_processor, val_ds, num_samples=100, seed=SEED, device=DEVICE)
 print(f"Validation Accuracy: {val_acc:.4f}")
 
 save_checkpoint(OUTPUT_DIR)

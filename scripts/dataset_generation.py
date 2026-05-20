@@ -1,20 +1,17 @@
 import argparse
 import shutil
 
-import gymnasium as gym
 import numpy as np
 from PIL import Image
 from datasets import Dataset, Features, Image as HFImage, Value
 from tqdm import tqdm
 
-from minigrid.wrappers import RGBImgPartialObsWrapper
-from minigrid.core.world_object import Goal
-
 from _bootstrap import bootstrap
 bootstrap()
 
-from vlm_minigrid_rl.expert import get_shortest_path_actions, turn_balance
+from vlm_minigrid_rl.minigrid_utils import choose_balanced_shortest_path, create_minigrid_env, reset_env_with_goal, turn_balance
 from vlm_minigrid_rl.paths import project_path
+from vlm_minigrid_rl.training_utils import ID_TO_ACTION
 
 ENV_SIZE = 8
 NUM_EPISODES = 1000
@@ -44,39 +41,18 @@ def main():
     env_id = f"MiniGrid-Empty-{env_size}x{env_size}-v0"
     print(f"Создаём датасет: {env_id}")
 
-    env = gym.make(env_id, render_mode="rgb_array")
-    wrapper = RGBImgPartialObsWrapper(env, tile_size=args.tile_size)
+    wrapper = create_minigrid_env(env_size, tile_size=args.tile_size)
+    env = wrapper.unwrapped
 
     data = []
     action_balance = 0
 
     for episode in tqdm(range(args.num_episodes), desc="Генерация траекторий"):
         seed = args.seed_base + episode
-        obs, _ = wrapper.reset(seed=seed)
+        obs = reset_env_with_goal(wrapper, seed)
         unwrapped = wrapper.unwrapped
-        unwrapped.place_agent()
 
-        grid = unwrapped.grid
-        for x in range(grid.width):
-            for y in range(grid.height):
-                cell = grid.get(x, y)
-                if cell is not None and cell.type == "goal":
-                    grid.set(x, y, None)
-        
-        unwrapped.place_obj(Goal())
-        obs = wrapper.observation(unwrapped.gen_obs())
-
-        candidate_paths = [
-            get_shortest_path_actions(wrapper, action_order=(0, 1, 2)),
-            get_shortest_path_actions(wrapper, action_order=(1, 0, 2)),
-        ]
-        candidate_paths = [candidate for candidate in candidate_paths if candidate]
-        if not candidate_paths:
-            continue
-        path = min(
-            candidate_paths,
-            key=lambda candidate: (abs(action_balance + turn_balance(candidate)), turn_balance(candidate)),
-        )
+        path = choose_balanced_shortest_path(wrapper, action_balance)
         action_balance += turn_balance(path)
         if not path:
             continue
@@ -92,12 +68,11 @@ def main():
                 "Choose the next action: forward, left or right."
             )
 
-            action_map = {0: "left", 1: "right", 2: "forward"}
             data.append({
                 "ego_image": Image.fromarray(ego_img),
                 "global_image": Image.fromarray(np.asarray(global_img, dtype=np.uint8)),
                 "prompt": prompt,
-                "action": action_map[action],
+                "action": ID_TO_ACTION[action],
                 "action_id": int(action),
                 "episode_id": int(episode),
                 "step": int(step_idx),

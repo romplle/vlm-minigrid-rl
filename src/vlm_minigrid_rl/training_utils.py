@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 
+ACTION_NAMES = ["left", "right", "forward"]
 ACTION_TO_ID = {"left": 0, "right": 1, "forward": 2}
 ID_TO_ACTION = {v: k for k, v in ACTION_TO_ID.items()}
 
