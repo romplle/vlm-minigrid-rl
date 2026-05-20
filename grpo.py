@@ -19,23 +19,28 @@ from minigrid.core.world_object import Goal
 sys.path.append("./nanoVLM")
 from nanoVLM.models.vision_language_model import VisionLanguageModel
 from model_utils import load_vlm_model
+from training_utils import majority_action_baseline, parse_action, set_global_seed, split_dataset_by_episode
 
 
-OUTPUT_DIR = "checkpoints/grpo_adapter"
-SFT_ADAPTER_PATH = "checkpoints/sft_adapter"
+OUTPUT_DIR = "checkpoints/grpo_adapter_8x8"
+SFT_ADAPTER_PATH = "checkpoints/sft_adapter_8x8"
 DATASET_PATH = "dataset"
 ENV_SIZE = 8
 TILE_SIZE = 32
 
 G = 16
 EPISODES = 100
+CHECKPOINT_INTERVAL = 25
 MAX_STEPS = 12
 LR = 2e-5
 EPSILON = 0.2
 BETA = 0.05
 USE_WANDB = True
+SEED = 42
+VAL_SPLIT = 0.1
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+set_global_seed(SEED)
 
 if USE_WANDB:
     wandb.init(project="nanoVLM-minigrid", name="grpo")
@@ -53,8 +58,8 @@ active_model, _, _ = load_vlm_model(
 lora_config = LoraConfig(
     r=64, 
     lora_alpha=64, 
-    target_modules=["q_proj", "k_proj", "v_proj", "out_proj"], 
-    lora_dropout=0.05, 
+    target_modules=["q_proj", "k_proj", "v_proj", "out_proj"],
+    lora_dropout=0.05,
     bias="none", 
     task_type="CAUSAL_LM"
 )
@@ -68,12 +73,14 @@ action_texts = ["left", "right", "forward"]
 action_ids_list = [tokenizer.encode(a, add_special_tokens=False) for a in action_texts]
 
 full_ds = load_from_disk(DATASET_PATH)
-split_ds = full_ds.train_test_split(test_size=0.1, seed=42)
-train_ds = split_ds["train"]
-val_ds = split_ds["test"]
+train_ds, val_ds, val_episodes = split_dataset_by_episode(full_ds, test_size=VAL_SPLIT, seed=SEED)
+majority_baseline = majority_action_baseline(train_ds, val_ds)
+print(f"Episode-level split: train={len(train_ds)}, val={len(val_ds)}, val episodes={len(val_episodes)}")
+print(f"Majority baseline on val: {majority_baseline['action']} -> {majority_baseline['accuracy']:.4f}")
 
 prompt = full_ds[0]["prompt"]
 
+action_single_ids = None
 if all(len(ids) == 1 for ids in action_ids_list):
     action_single_ids = [ids[0] for ids in action_ids_list]
 
@@ -151,7 +158,8 @@ def create_env():
     return RGBImgPartialObsWrapper(env, tile_size=TILE_SIZE)
 
 
-def evaluate_accuracy(model, dataset, num_samples=100, seed=42):
+def evaluate_accuracy(model, dataset, num_samples=100, seed=SEED):
+    was_training = model.training
     model.eval()
     rng = random.Random(seed)
     correct = 0
@@ -188,28 +196,30 @@ def evaluate_accuracy(model, dataset, num_samples=100, seed=42):
             )
 
         generated_text = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip().lower()
-
-        pred_action = None
-        if "left" in generated_text:
-            pred_action = "left"
-        elif "right" in generated_text:
-            pred_action = "right"
-        elif "forward" in generated_text:
-            pred_action = "forward"
-            
+        pred_action, _ = parse_action(generated_text)
         if pred_action == true_action:
             correct += 1
 
-    model.train()
+    if was_training:
+        model.train()
     return correct / eval_size
+
+
+def save_checkpoint(save_dir):
+    os.makedirs(save_dir, exist_ok=True)
+    active_model.save_pretrained(save_dir)
+    tokenizer.save_pretrained(save_dir)
+    image_processor.save_pretrained(save_dir)
+    print(f"Сохранено в {save_dir}")
 
 
 # GRPO
 global_step = 0
 env = create_env()
+rng = random.Random(SEED)
 
 for episode in range(EPISODES):
-    seed = random.randint(0, 100000)
+    seed = rng.randint(0, 100000)
     
     group_trajectories = []
     group_returns = []
@@ -249,10 +259,15 @@ for episode in range(EPISODES):
                 ref_full_logits = get_logits(ref_model, input_ids, pixel_values)
                 ref_vocab_last = ref_full_logits[0, -1, :]
                 
-                aid_tensor = torch.tensor(action_single_ids, dtype=torch.long, device=DEVICE)
-                ref_action_logits = ref_vocab_last.index_select(0, aid_tensor)
-                ref_probs = F.softmax(ref_action_logits, dim=-1)
-                ref_log_prob = torch.log(ref_probs[action_idx] + 1e-12)
+                if action_single_ids is not None:
+                    aid_tensor = torch.tensor(action_single_ids, dtype=torch.long, device=DEVICE)
+                    ref_action_logits = ref_vocab_last.index_select(0, aid_tensor)
+                    ref_probs = F.softmax(ref_action_logits, dim=-1)
+                    ref_log_prob = torch.log(ref_probs[action_idx] + 1e-12)
+                else:
+                    ref_log_prob = seq_logprob_given_prefix(
+                        ref_model, tokenizer, input_ids, pixel_values, action_ids_list[action_idx]
+                    )
 
             obs, reward, terminated, truncated, _ = env.step(action_idx)
             
@@ -341,13 +356,13 @@ for episode in range(EPISODES):
     if USE_WANDB:
         wandb.log({"train/grpo_loss": episode_loss, "episode": episode})
 
+    if (episode + 1) % CHECKPOINT_INTERVAL == 0:
+        save_checkpoint(f"{OUTPUT_DIR}/episode-{episode+1}")
+
 val_acc = evaluate_accuracy(active_model, val_ds, num_samples=100)
 print(f"Validation Accuracy: {val_acc:.4f}")
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-active_model.save_pretrained(OUTPUT_DIR)
-tokenizer.save_pretrained(OUTPUT_DIR)
-image_processor.save_pretrained(OUTPUT_DIR)
+save_checkpoint(OUTPUT_DIR)
 print(f"GRPO-обучение завершено. Модель сохранена в {OUTPUT_DIR}")
 
 if USE_WANDB:
