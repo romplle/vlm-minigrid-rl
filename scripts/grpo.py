@@ -1,5 +1,4 @@
 import os
-import sys
 import random
 import argparse
 
@@ -17,10 +16,17 @@ from bitsandbytes.optim import AdamW8bit
 from minigrid.wrappers import RGBImgPartialObsWrapper
 from minigrid.core.world_object import Goal
 
-sys.path.append("./nanoVLM")
-from nanoVLM.models.vision_language_model import VisionLanguageModel
-from model_utils import load_vlm_model
-from training_utils import majority_action_baseline, parse_action, set_global_seed, split_dataset_by_episode
+from _bootstrap import bootstrap
+bootstrap()
+
+from vlm_minigrid_rl.model_utils import load_vlm_model
+from vlm_minigrid_rl.paths import project_path
+from vlm_minigrid_rl.training_utils import (
+    majority_action_baseline,
+    parse_action,
+    set_global_seed,
+    split_dataset_by_episode,
+)
 
 
 OUTPUT_DIR = "checkpoints/grpo_adapter_8x8"
@@ -77,9 +83,9 @@ def default_max_steps(env_size):
 
 args = parse_args()
 ENV_SIZE = args.env_size
-DATASET_PATH = args.dataset_path or default_dataset_path(ENV_SIZE)
-SFT_ADAPTER_PATH = args.sft_adapter_path or default_sft_adapter_path(ENV_SIZE)
-OUTPUT_DIR = args.output_dir or default_grpo_adapter_path(ENV_SIZE)
+DATASET_PATH = str(project_path(args.dataset_path or default_dataset_path(ENV_SIZE)))
+SFT_ADAPTER_PATH = str(project_path(args.sft_adapter_path or default_sft_adapter_path(ENV_SIZE)))
+OUTPUT_DIR = str(project_path(args.output_dir or default_grpo_adapter_path(ENV_SIZE)))
 EPISODES = args.episodes
 CHECKPOINT_INTERVAL = args.checkpoint_interval
 MAX_STEPS = args.max_steps if args.max_steps is not None else default_max_steps(ENV_SIZE)

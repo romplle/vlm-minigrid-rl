@@ -1,6 +1,3 @@
-import os
-import sys
-import random
 import argparse
 
 import torch
@@ -13,10 +10,13 @@ from transformers import GenerationConfig
 from minigrid.wrappers import RGBImgPartialObsWrapper
 from minigrid.core.world_object import Goal
 
-sys.path.append("./nanoVLM")
-from dataset_generation import get_shortest_path_actions, turn_balance
-from model_utils import load_vlm_model, load_vlm_model_with_adapters
-from training_utils import majority_action_baseline, parse_action, set_global_seed, split_dataset_by_episode
+from _bootstrap import bootstrap
+bootstrap()
+
+from vlm_minigrid_rl.expert import get_shortest_path_actions, turn_balance
+from vlm_minigrid_rl.model_utils import load_vlm_model, load_vlm_model_with_adapters
+from vlm_minigrid_rl.paths import project_path
+from vlm_minigrid_rl.training_utils import majority_action_baseline, parse_action, set_global_seed, split_dataset_by_episode
 
 
 BASE_MODEL_ID = "lusxvr/nanoVLM-222M"
@@ -63,9 +63,9 @@ def default_max_steps(env_size):
 
 args = parse_args()
 ENV_SIZE = args.env_size
-DATASET_PATH = args.dataset_path or default_dataset_path(ENV_SIZE)
-SFT_ADAPTER_PATH = args.sft_adapter_path or default_sft_adapter_path(ENV_SIZE)
-GRPO_ADAPTER_PATH = args.grpo_adapter_path or default_grpo_adapter_path(ENV_SIZE)
+DATASET_PATH = str(project_path(args.dataset_path or default_dataset_path(ENV_SIZE)))
+SFT_ADAPTER_PATH = str(project_path(args.sft_adapter_path or default_sft_adapter_path(ENV_SIZE)))
+GRPO_ADAPTER_PATH = str(project_path(args.grpo_adapter_path or default_grpo_adapter_path(ENV_SIZE)))
 TEST_EPISODES = args.episodes
 MAX_STEPS = args.max_steps if args.max_steps is not None else default_max_steps(ENV_SIZE)
 VAL_SPLIT = args.val_split

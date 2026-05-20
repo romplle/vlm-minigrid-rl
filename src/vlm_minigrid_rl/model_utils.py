@@ -2,6 +2,11 @@ import inspect
 import types
 from transformers import AutoTokenizer, AutoImageProcessor
 from peft import PeftModel
+
+from .paths import ensure_project_paths
+
+
+ensure_project_paths()
 from nanoVLM.models.vision_language_model import VisionLanguageModel
 
 

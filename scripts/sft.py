@@ -1,5 +1,4 @@
 import os
-import sys
 import inspect
 import types
 import random
@@ -14,9 +13,17 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoImageProcessor, GenerationConfig
 
-sys.path.append("./nanoVLM")
+from _bootstrap import bootstrap
+bootstrap()
+
 from nanoVLM.models.vision_language_model import VisionLanguageModel
-from training_utils import majority_action_baseline, parse_action, set_global_seed, split_dataset_by_episode
+from vlm_minigrid_rl.paths import project_path
+from vlm_minigrid_rl.training_utils import (
+    majority_action_baseline,
+    parse_action,
+    set_global_seed,
+    split_dataset_by_episode,
+)
 
 
 def dummy_create_or_update_model_card(self, save_directory):
@@ -65,8 +72,8 @@ def default_output_dir(env_size):
 
 args = parse_args()
 experiment_name = f"{args.env_size}x{args.env_size}"
-DATASET_PATH = args.dataset_path or default_dataset_path(args.env_size)
-OUTPUT_DIR = args.output_dir or default_output_dir(args.env_size)
+DATASET_PATH = str(project_path(args.dataset_path or default_dataset_path(args.env_size)))
+OUTPUT_DIR = str(project_path(args.output_dir or default_output_dir(args.env_size)))
 EPOCHS = args.epochs if args.epochs is not None else EPOCHS
 VAL_SPLIT = args.val_split if args.val_split is not None else VAL_SPLIT
 VAL_SAMPLES = args.val_samples
