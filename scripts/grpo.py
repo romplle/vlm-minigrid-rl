@@ -26,6 +26,8 @@ from vlm_minigrid_rl.model_utils import (
 )
 from vlm_minigrid_rl.paths import project_path
 from vlm_minigrid_rl.training_utils import (
+    GOAL_COLORS,
+    build_navigation_prompt,
     majority_action_baseline,
     set_global_seed,
     split_dataset_by_episode,
@@ -63,6 +65,8 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=LR)
     parser.add_argument("--epsilon", type=float, default=EPSILON)
     parser.add_argument("--beta", type=float, default=BETA)
+    parser.add_argument("--goal-color", default="green", choices=GOAL_COLORS)
+    parser.add_argument("--prompt-goal-color", default=None, choices=GOAL_COLORS)
     parser.add_argument("--wandb-name", default=None)
     parser.add_argument("--no-wandb", action="store_true")
     return parser.parse_args()
@@ -92,6 +96,8 @@ VAL_SPLIT = args.val_split
 LR = args.lr
 EPSILON = args.epsilon
 BETA = args.beta
+GOAL_COLOR = args.goal_color
+PROMPT_GOAL_COLOR = args.prompt_goal_color or args.goal_color
 USE_WANDB = USE_WANDB and not args.no_wandb
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -132,8 +138,9 @@ train_ds, val_ds, val_episodes = split_dataset_by_episode(full_ds, test_size=VAL
 majority_baseline = majority_action_baseline(train_ds, val_ds)
 print(f"Episode-level split: train={len(train_ds)}, val={len(val_ds)}, val episodes={len(val_episodes)}")
 print(f"Majority baseline on val: {majority_baseline['action']} -> {majority_baseline['accuracy']:.4f}")
+print(f"GRPO rollout goal color: {GOAL_COLOR} | prompt goal color: {PROMPT_GOAL_COLOR}")
 
-prompt = full_ds[0]["prompt"]
+prompt = build_navigation_prompt(PROMPT_GOAL_COLOR)
 
 def save_checkpoint(save_dir):
     os.makedirs(save_dir, exist_ok=True)
@@ -159,7 +166,7 @@ for episode in range(EPISODES):
         print(f"Validation Accuracy: {val_acc:.4f}")
 
     for g in range(G):
-        obs = reset_env_with_goal(env, seed)
+        obs = reset_env_with_goal(env, seed, goal_color=GOAL_COLOR)
 
         trajectory = []
         episode_reward = 0.0

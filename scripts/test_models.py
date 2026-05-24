@@ -15,7 +15,14 @@ from vlm_minigrid_rl.minigrid_utils import (
 )
 from vlm_minigrid_rl.model_utils import load_vlm_model, load_vlm_model_with_adapters
 from vlm_minigrid_rl.paths import project_path
-from vlm_minigrid_rl.training_utils import ACTION_TO_ID, majority_action_baseline, set_global_seed, split_dataset_by_episode
+from vlm_minigrid_rl.training_utils import (
+    ACTION_TO_ID,
+    GOAL_COLORS,
+    build_navigation_prompt,
+    majority_action_baseline,
+    set_global_seed,
+    split_dataset_by_episode,
+)
 
 
 BASE_MODEL_ID = "lusxvr/nanoVLM-222M"
@@ -40,6 +47,8 @@ def parse_args():
     parser.add_argument("--episodes", type=int, default=TEST_EPISODES)
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--val-split", type=float, default=VAL_SPLIT)
+    parser.add_argument("--goal-color", default="green", choices=GOAL_COLORS)
+    parser.add_argument("--prompt-goal-color", default=None, choices=GOAL_COLORS)
     parser.add_argument("--skip-grpo", action="store_true")
     return parser.parse_args()
 
@@ -64,6 +73,8 @@ GRPO_ADAPTER_PATH = str(project_path(args.grpo_adapter_path or default_grpo_adap
 TEST_EPISODES = args.episodes
 MAX_STEPS = args.max_steps if args.max_steps is not None else default_max_steps(ENV_SIZE)
 VAL_SPLIT = args.val_split
+GOAL_COLOR = args.goal_color
+PROMPT_GOAL_COLOR = args.prompt_goal_color or args.goal_color
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 set_global_seed(SEED)
@@ -73,9 +84,10 @@ if __name__ == "__main__":
     full_ds = load_from_disk(DATASET_PATH)
     train_ds, val_ds, _ = split_dataset_by_episode(full_ds, test_size=VAL_SPLIT, seed=SEED)
     majority = majority_action_baseline(train_ds, val_ds)
-    test_prompt = full_ds[0]["prompt"]
+    test_prompt = build_navigation_prompt(PROMPT_GOAL_COLOR)
 
     print("=== Dataset baselines ===")
+    print(f"Evaluation goal color: {GOAL_COLOR} | prompt goal color: {PROMPT_GOAL_COLOR}")
     print(f"Episode-level train rows: {len(train_ds)}, val rows: {len(val_ds)}")
     print(
         f"Majority action from train: {majority['action']} | "
@@ -99,7 +111,8 @@ if __name__ == "__main__":
         SEED,
         DEVICE,
         "SFT",
-        TEST_EPISODES,
+        episodes=TEST_EPISODES,
+        goal_color=GOAL_COLOR,
     )
 
     results = [("SFT", sft_result)]
@@ -123,7 +136,8 @@ if __name__ == "__main__":
             SEED,
             DEVICE,
             "GRPO",
-            TEST_EPISODES,
+            episodes=TEST_EPISODES,
+            goal_color=GOAL_COLOR,
         )
         results.append(("GRPO", grpo_result))
 
@@ -134,9 +148,17 @@ if __name__ == "__main__":
         TILE_SIZE,
         MAX_STEPS,
         SEED,
-        TEST_EPISODES,
+        episodes=TEST_EPISODES,
+        goal_color=GOAL_COLOR,
     )
-    expert_result = evaluate_expert_in_env(ENV_SIZE, TILE_SIZE, MAX_STEPS, SEED, TEST_EPISODES)
+    expert_result = evaluate_expert_in_env(
+        ENV_SIZE,
+        TILE_SIZE,
+        MAX_STEPS,
+        SEED,
+        episodes=TEST_EPISODES,
+        goal_color=GOAL_COLOR,
+    )
 
     print_comparison_table([
         ("Majority baseline", majority_result),

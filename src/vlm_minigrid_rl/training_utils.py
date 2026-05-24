@@ -9,6 +9,18 @@ import torch
 ACTION_NAMES = ["left", "right", "forward"]
 ACTION_TO_ID = {"left": 0, "right": 1, "forward": 2}
 ID_TO_ACTION = {v: k for k, v in ACTION_TO_ID.items()}
+GOAL_COLORS = ["green", "red"]
+
+
+def build_navigation_prompt(goal_color: str = "green") -> str:
+    if goal_color not in GOAL_COLORS:
+        raise ValueError(f"Unsupported goal color: {goal_color}. Expected one of {GOAL_COLORS}.")
+
+    return (
+        "You are a robot in a 2D grid world. You see a 7x7 partial RGB view in front of you.\n"
+        f"Your mission: get to the {goal_color} goal square as quickly as possible.\n"
+        "Choose the next action: forward, left or right."
+    )
 
 
 def set_global_seed(seed: int, deterministic: bool = True) -> None:

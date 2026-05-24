@@ -11,7 +11,7 @@ bootstrap()
 
 from vlm_minigrid_rl.minigrid_utils import choose_balanced_shortest_path, create_minigrid_env, reset_env_with_goal, turn_balance
 from vlm_minigrid_rl.paths import project_path
-from vlm_minigrid_rl.training_utils import ID_TO_ACTION
+from vlm_minigrid_rl.training_utils import GOAL_COLORS, ID_TO_ACTION, build_navigation_prompt
 
 ENV_SIZE = 8
 NUM_EPISODES = 1000
@@ -27,6 +27,8 @@ def parse_args():
     parser.add_argument("--tile-size", type=int, default=TILE_SIZE)
     parser.add_argument("--seed-base", type=int, default=SEED_BASE)
     parser.add_argument("--save-path", default=None)
+    parser.add_argument("--goal-color", default="green", choices=GOAL_COLORS)
+    parser.add_argument("--prompt-goal-color", default=None, choices=GOAL_COLORS)
     return parser.parse_args()
 
 
@@ -37,9 +39,11 @@ def default_dataset_path(env_size):
 def main():
     args = parse_args()
     env_size = args.env_size
+    prompt_goal_color = args.prompt_goal_color or args.goal_color
     save_path = project_path(args.save_path or default_dataset_path(env_size))
     env_id = f"MiniGrid-Empty-{env_size}x{env_size}-v0"
-    print(f"Создаём датасет: {env_id}")
+    prompt = build_navigation_prompt(prompt_goal_color)
+    print(f"Создаём датасет: {env_id}, goal_color={args.goal_color}, prompt_goal_color={prompt_goal_color}")
 
     wrapper = create_minigrid_env(env_size, tile_size=args.tile_size)
     env = wrapper.unwrapped
@@ -49,7 +53,7 @@ def main():
 
     for episode in tqdm(range(args.num_episodes), desc="Генерация траекторий"):
         seed = args.seed_base + episode
-        obs = reset_env_with_goal(wrapper, seed)
+        obs = reset_env_with_goal(wrapper, seed, goal_color=args.goal_color)
         unwrapped = wrapper.unwrapped
 
         path = choose_balanced_shortest_path(wrapper, action_balance)
@@ -62,12 +66,6 @@ def main():
         for step_idx, action in enumerate(path):
             ego_img = np.asarray(obs["image"], dtype=np.uint8)
             
-            prompt = (
-                "You are a robot in a 2D grid world. You see a 7x7 partial RGB view in front of you.\n"
-                "Your mission: get to the green goal square as quickly as possible.\n"
-                "Choose the next action: forward, left or right."
-            )
-
             data.append({
                 "ego_image": Image.fromarray(ego_img),
                 "global_image": Image.fromarray(np.asarray(global_img, dtype=np.uint8)),

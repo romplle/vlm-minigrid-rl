@@ -5,7 +5,7 @@ from minigrid.core.world_object import Goal
 from minigrid.wrappers import RGBImgPartialObsWrapper
 from tqdm import tqdm
 
-from .training_utils import ACTION_TO_ID, ID_TO_ACTION, set_global_seed
+from .training_utils import ACTION_TO_ID, GOAL_COLORS, ID_TO_ACTION, set_global_seed
 
 
 def default_max_steps(env_size):
@@ -17,7 +17,10 @@ def create_minigrid_env(env_size, tile_size=32):
     return RGBImgPartialObsWrapper(env, tile_size=tile_size)
 
 
-def reset_env_with_goal(env, seed):
+def reset_env_with_goal(env, seed, goal_color="green"):
+    if goal_color not in GOAL_COLORS:
+        raise ValueError(f"Unsupported goal color: {goal_color}. Expected one of {GOAL_COLORS}.")
+
     obs, _ = env.reset(seed=seed)
     unwrapped = env.unwrapped
     unwrapped.place_agent()
@@ -26,7 +29,7 @@ def reset_env_with_goal(env, seed):
             cell = unwrapped.grid.get(x, y)
             if cell and cell.type == "goal":
                 unwrapped.grid.set(x, y, None)
-    unwrapped.place_obj(Goal())
+    unwrapped.place_obj(Goal(goal_color))
     return env.observation(unwrapped.gen_obs())
 
 
@@ -173,6 +176,7 @@ def evaluate_model_in_env(
     device,
     model_name="Model",
     episodes=50,
+    goal_color="green",
 ):
     from transformers import GenerationConfig
 
@@ -187,7 +191,7 @@ def evaluate_model_in_env(
     print(f"\n[{model_name}] Запуск симуляции ({episodes} эпизодов)...")
 
     for episode in tqdm(range(episodes), desc=f"Testing {model_name}"):
-        obs = reset_env_with_goal(env, seed + episode)
+        obs = reset_env_with_goal(env, seed + episode, goal_color=goal_color)
         episode_reward = 0.0
 
         for step in range(max_steps):
@@ -221,13 +225,22 @@ def evaluate_model_in_env(
     return result
 
 
-def evaluate_fixed_action_in_env(action_name, action_idx, env_size, tile_size, max_steps, seed, episodes=50):
+def evaluate_fixed_action_in_env(
+    action_name,
+    action_idx,
+    env_size,
+    tile_size,
+    max_steps,
+    seed,
+    episodes=50,
+    goal_color="green",
+):
     env = create_minigrid_env(env_size, tile_size=tile_size)
     metrics = empty_metrics()
     print(f"\n[Majority baseline: {action_name}] Запуск симуляции ({episodes} эпизодов)...")
 
     for episode in tqdm(range(episodes), desc=f"Testing majority-{action_name}"):
-        obs = reset_env_with_goal(env, seed + episode)
+        obs = reset_env_with_goal(env, seed + episode, goal_color=goal_color)
         episode_reward = 0.0
 
         for step in range(max_steps):
@@ -250,14 +263,14 @@ def evaluate_fixed_action_in_env(action_name, action_idx, env_size, tile_size, m
     return result
 
 
-def evaluate_expert_in_env(env_size, tile_size, max_steps, seed, episodes=50):
+def evaluate_expert_in_env(env_size, tile_size, max_steps, seed, episodes=50, goal_color="green"):
     env = create_minigrid_env(env_size, tile_size=tile_size)
     metrics = empty_metrics()
     action_balance = 0
     print(f"\n[Expert BFS] Запуск симуляции ({episodes} эпизодов)...")
 
     for episode in tqdm(range(episodes), desc="Testing expert"):
-        reset_env_with_goal(env, seed + episode)
+        reset_env_with_goal(env, seed + episode, goal_color=goal_color)
         path = choose_balanced_shortest_path(env, action_balance)
         action_balance += turn_balance(path)
         episode_reward = 0.0
