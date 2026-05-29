@@ -13,7 +13,7 @@ from vlm_minigrid_rl.minigrid_utils import (
     evaluate_model_in_env,
     print_comparison_table,
 )
-from vlm_minigrid_rl.model_utils import load_vlm_model, load_vlm_model_with_adapters
+from vlm_minigrid_rl.model_utils import load_base_vlm_model, load_vlm_model, load_vlm_model_with_adapters
 from vlm_minigrid_rl.paths import project_path
 from vlm_minigrid_rl.training_utils import (
     ACTION_TO_ID,
@@ -49,6 +49,7 @@ def parse_args():
     parser.add_argument("--val-split", type=float, default=VAL_SPLIT)
     parser.add_argument("--goal-color", default="green", choices=GOAL_COLORS)
     parser.add_argument("--prompt-goal-color", default=None, choices=GOAL_COLORS)
+    parser.add_argument("--skip-base", action="store_true")
     parser.add_argument("--skip-grpo", action="store_true")
     return parser.parse_args()
 
@@ -96,7 +97,33 @@ if __name__ == "__main__":
     print(f"Train action distribution: {majority['train_distribution']}")
     print(f"Val action distribution: {majority['eval_distribution']}")
 
-    print("=== Оценка SFT Модели ===")
+    results = []
+
+    if not args.skip_base:
+        print("=== Оценка чистой NanoVLM ===")
+        base_model, base_tokenizer, base_image_processor = load_base_vlm_model(
+            BASE_MODEL_ID, DEVICE, is_trainable=False
+        )
+        base_result = evaluate_model_in_env(
+            base_model,
+            base_tokenizer,
+            base_image_processor,
+            test_prompt,
+            ENV_SIZE,
+            TILE_SIZE,
+            MAX_STEPS,
+            SEED,
+            DEVICE,
+            "Base NanoVLM",
+            episodes=TEST_EPISODES,
+            goal_color=GOAL_COLOR,
+        )
+        results.append(("Base NanoVLM", base_result))
+        del base_model
+        if DEVICE == "cuda":
+            torch.cuda.empty_cache()
+
+    print("\n=== Оценка SFT Модели ===")
     sft_model, tokenizer, image_processor = load_vlm_model(
         BASE_MODEL_ID, SFT_ADAPTER_PATH, DEVICE, is_trainable=False
     )
@@ -115,7 +142,7 @@ if __name__ == "__main__":
         goal_color=GOAL_COLOR,
     )
 
-    results = [("SFT", sft_result)]
+    results.append(("SFT", sft_result))
 
     if not args.skip_grpo:
         print("\n=== Оценка GRPO Модели ===")

@@ -83,6 +83,26 @@ def load_sft_training_model(model_id):
     return model, tokenizer, image_processor
 
 
+def load_base_vlm_model(model_id, device="cuda", is_trainable=False):
+    tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_ID)
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.chat_template = NANOVLM_CHAT_TEMPLATE
+
+    model = VisionLanguageModel.from_pretrained(model_id)
+    model.tokenizer = tokenizer
+    model = configure_nanovlm_for_peft(model)
+    model = patch_nanovlm(model)
+
+    image_processor = AutoImageProcessor.from_pretrained(IMAGE_PROCESSOR_ID)
+
+    if not is_trainable:
+        model = model.to(device).eval()
+        for param in model.parameters():
+            param.requires_grad = False
+
+    return model, tokenizer, image_processor
+
+
 def load_vlm_model(base_model_or_id, adapter_path, device="cuda", is_trainable=False):
     disable_peft_model_card()
 

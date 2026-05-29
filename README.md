@@ -144,11 +144,12 @@ python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 -
 | Policy | Success Rate | Avg Reward | Avg Steps (Win) | Timeouts | Action distribution |
 |---|---:|---:|---:|---:|---|
 | Majority-forward | 5.2% | 0.052 | 2.2 | 237/250 | L:0.0% / R:0.0% / F:100.0% |
+| Base NanoVLM | 12.0% | 0.118 | 5.0 | 220/250 | L:34.9% / R:1.6% / F:63.5% |
 | SFT | 91.2% | 0.892 | 6.1 | 22/250 | L:17.0% / R:15.5% / F:67.5% |
 | GRPO | 95.2% | 0.932 | 6.1 | 12/250 | L:17.3% / R:14.9% / F:67.8% |
 | Expert BFS | 100.0% | 0.982 | 5.2 | 0/250 | L:13.4% / R:13.4% / F:73.2% |
 
-Вывод: для 8x8 pipeline `expert trajectories -> SFT -> GRPO -> environment evaluation` работает корректно. GRPO повышает success rate на `+4.0` процентных пункта относительно SFT и уменьшает число timeout-ов с `22/250` до `12/250`.
+Вывод: чистая NanoVLM без дообучения почти не решает задачу, хотя иногда оказывается лучше majority-forward за счёт ненулевого числа поворотов. Для 8x8 pipeline `expert trajectories -> SFT -> GRPO -> environment evaluation` работает корректно: SFT повышает success rate с `12.0%` до `91.2%`, а GRPO дополнительно повышает его до `95.2%` и уменьшает число timeout-ов с `22/250` до `12/250`.
 
 ### Среда 16x16
 
@@ -199,11 +200,12 @@ python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x1
 | Policy | Success Rate | Avg Reward | Avg Steps (Win) | Timeouts | Action distribution |
 |---|---:|---:|---:|---:|---|
 | Majority-forward | 3.2% | 0.032 | 4.1 | 242/250 | L:0.0% / R:0.0% / F:100.0% |
+| Base NanoVLM | 10.0% | 0.098 | 17.8 | 225/250 | L:23.3% / R:1.3% / F:75.4% |
 | SFT | 43.2% | 0.424 | 20.7 | 142/250 | L:12.0% / R:4.3% / F:83.8% |
 | GRPO | 58.4% | 0.573 | 22.0 | 104/250 | L:13.3% / R:3.5% / F:83.2% |
 | Expert BFS | 100.0% | 0.991 | 10.6 | 0/250 | L:6.8% / R:6.9% / F:86.3% |
 
-Вывод: в 16x16 GRPO повышает success rate на `+15.2` процентных пункта относительно SFT, но итоговое качество остаётся заметно ниже expert BFS. Эта среда выявляет ограничения текущего pipeline.
+Вывод: в 16x16 чистая NanoVLM также остаётся слабой (`10.0%` success rate). SFT даёт большой прирост относительно base model, но задача остаётся сложной. GRPO повышает success rate на `+15.2` процентных пункта относительно SFT, но итоговое качество остаётся заметно ниже expert BFS. Эта среда выявляет ограничения текущего pipeline.
 
 ## Дополнительные эксперименты
 
@@ -317,7 +319,7 @@ python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x1
 ├── checkpoints/
 │   ├── sft_adapter_8x8/          # SFT LoRA adapter для 8x8
 │   ├── grpo_adapter_8x8/         # GRPO LoRA adapter для 8x8
-│   ├── sft_adapter_16x16/        # SFT checkpoints для 16x16
+│   ├── sft_adapter_16x16/        # SFT LoRA adapter для 16x16
 │   └── grpo_adapter_16x16/       # GRPO LoRA adapter для 16x16
 ├── datasets/
 │   ├── dataset_8x8/              # экспертный датасет для 8x8
@@ -349,7 +351,7 @@ python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x1
 - сгенерировать экспертные BFS trajectories;
 - обучить SFT baseline для прямого выбора действий;
 - реализовать GRPO fine-tuning;
-- добавить majority-forward и expert BFS baselines;
+- добавить Base NanoVLM, majority-forward и expert BFS baselines;
 - получить `91.2%` success rate для SFT и `95.2%` для GRPO на 8x8;
 - показать, что 16x16 существенно сложнее: SFT достигает `43.2%`, GRPO - `58.4%`;
 - показать частичный, но нестабильный перенос между 8x8 и 16x16;
