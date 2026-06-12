@@ -47,6 +47,7 @@ MAX_STEPS = 12
 LR = 2e-5
 EPSILON = 0.2
 BETA = 0.05
+LORA_DROPOUT = 0.05
 USE_WANDB = True
 SEED = 42
 VAL_SPLIT = 0.1
@@ -65,6 +66,8 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=LR)
     parser.add_argument("--epsilon", type=float, default=EPSILON)
     parser.add_argument("--beta", type=float, default=BETA)
+    parser.add_argument("--lora-dropout", type=float, default=LORA_DROPOUT)
+    parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument("--goal-color", default="green", choices=GOAL_COLORS)
     parser.add_argument("--prompt-goal-color", default=None, choices=GOAL_COLORS)
     parser.add_argument("--wandb-name", default=None)
@@ -96,6 +99,8 @@ VAL_SPLIT = args.val_split
 LR = args.lr
 EPSILON = args.epsilon
 BETA = args.beta
+LORA_DROPOUT = args.lora_dropout
+SEED = args.seed
 GOAL_COLOR = args.goal_color
 PROMPT_GOAL_COLOR = args.prompt_goal_color or args.goal_color
 USE_WANDB = USE_WANDB and not args.no_wandb
@@ -120,7 +125,7 @@ lora_config = LoraConfig(
     r=64, 
     lora_alpha=64, 
     target_modules=["q_proj", "k_proj", "v_proj", "out_proj"],
-    lora_dropout=0.05,
+    lora_dropout=LORA_DROPOUT,
     bias="none", 
     task_type="CAUSAL_LM"
 )
@@ -138,7 +143,8 @@ train_ds, val_ds, val_episodes = split_dataset_by_episode(full_ds, test_size=VAL
 majority_baseline = majority_action_baseline(train_ds, val_ds)
 print(f"Episode-level split: train={len(train_ds)}, val={len(val_ds)}, val episodes={len(val_episodes)}")
 print(f"Majority baseline on val: {majority_baseline['action']} -> {majority_baseline['accuracy']:.4f}")
-print(f"GRPO rollout goal color: {GOAL_COLOR} | prompt goal color: {PROMPT_GOAL_COLOR}")
+print(f"Rollout goal color: {GOAL_COLOR} | prompt goal color: {PROMPT_GOAL_COLOR}")
+print(f"Config: lr={LR}, epsilon={EPSILON}, beta={BETA}, lora_dropout={LORA_DROPOUT}, seed={SEED}")
 
 prompt = build_navigation_prompt(PROMPT_GOAL_COLOR)
 

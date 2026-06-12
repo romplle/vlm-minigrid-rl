@@ -172,8 +172,7 @@ for epoch in range(EPOCHS):
     save_model_bundle(model, tokenizer, image_processor, save_dir)
     print(f"Сохранено в {save_dir}")
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-save_model_bundle(model, tokenizer, image_processor, OUTPUT_DIR)
+print(f"SFT-обучение завершено. Последний checkpoint сохранён в {OUTPUT_DIR}/epoch-{EPOCHS}")
 
 if USE_WANDB:
     wandb.finish()

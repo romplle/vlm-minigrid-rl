@@ -66,12 +66,21 @@ def clear_peft_metadata(model):
     return model
 
 
-def load_sft_training_model(model_id):
-    disable_peft_model_card()
-
+def load_project_tokenizer():
     tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_ID)
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.chat_template = NANOVLM_CHAT_TEMPLATE
+    return tokenizer
+
+
+def load_project_image_processor():
+    return AutoImageProcessor.from_pretrained(IMAGE_PROCESSOR_ID)
+
+
+def load_sft_training_model(model_id):
+    disable_peft_model_card()
+
+    tokenizer = load_project_tokenizer()
 
     model = VisionLanguageModel.from_pretrained(model_id)
     model.tokenizer = tokenizer
@@ -79,21 +88,19 @@ def load_sft_training_model(model_id):
     model = patch_nanovlm(model)
     model = prepare_model_for_kbit_training(model)
 
-    image_processor = AutoImageProcessor.from_pretrained(IMAGE_PROCESSOR_ID)
+    image_processor = load_project_image_processor()
     return model, tokenizer, image_processor
 
 
 def load_base_vlm_model(model_id, device="cuda", is_trainable=False):
-    tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_ID)
-    tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.chat_template = NANOVLM_CHAT_TEMPLATE
+    tokenizer = load_project_tokenizer()
 
     model = VisionLanguageModel.from_pretrained(model_id)
     model.tokenizer = tokenizer
     model = configure_nanovlm_for_peft(model)
     model = patch_nanovlm(model)
 
-    image_processor = AutoImageProcessor.from_pretrained(IMAGE_PROCESSOR_ID)
+    image_processor = load_project_image_processor()
 
     if not is_trainable:
         model = model.to(device).eval()
@@ -112,8 +119,8 @@ def load_vlm_model(base_model_or_id, adapter_path, device="cuda", is_trainable=F
     else:
         model = base_model_or_id
 
-    tokenizer = AutoTokenizer.from_pretrained(adapter_path)
-    image_processor = AutoImageProcessor.from_pretrained(adapter_path)
+    tokenizer = load_project_tokenizer()
+    image_processor = load_project_image_processor()
 
     model = PeftModel.from_pretrained(model, adapter_path)
     model = model.merge_and_unload()
@@ -154,12 +161,8 @@ def save_model_bundle(model, tokenizer, image_processor, save_dir):
     image_processor.save_pretrained(save_dir)
 
 
-def format_sft_prefix(prompt):
+def format_action_prefix(prompt):
     return f"User: {IMAGE_TOKEN}\n{prompt}\nAssistant:"
-
-
-def format_inference_prompt(prompt):
-    return f"User: {IMAGE_TOKEN}\n{prompt}\nAssistant: "
 
 
 def preprocess_images(image_processor, images, device=None):
@@ -188,7 +191,7 @@ def make_sft_collate_fn(tokenizer, image_processor, max_seq_len=256):
         prompts = [item["prompt"] for item in batch]
         actions = [str(item["action"]) for item in batch]
 
-        prefix_texts = [format_sft_prefix(prompt) for prompt in prompts]
+        prefix_texts = [format_action_prefix(prompt) for prompt in prompts]
         full_texts = [
             f"{prefix} {action}{tokenizer.eos_token}"
             for prefix, action in zip(prefix_texts, actions)
@@ -225,7 +228,7 @@ def make_sft_collate_fn(tokenizer, image_processor, max_seq_len=256):
 
 
 def build_inference_inputs(tokenizer, image_processor, image, prompt, device):
-    encoded = tokenizer(format_inference_prompt(prompt), return_tensors="pt")
+    encoded = tokenizer(format_action_prefix(prompt), return_tensors="pt")
     input_ids = encoded["input_ids"].to(device)
     attention_mask = encoded.get("attention_mask", None)
     if attention_mask is not None:
@@ -282,8 +285,15 @@ def get_vocab_last_logits(model, input_ids, pixel_values, attention_mask=None):
     return logits[0, -1, :]
 
 
+def action_token_texts(action_names=ACTION_NAMES):
+    return [f" {action}" for action in action_names]
+
+
 def action_token_ids(tokenizer, action_texts=ACTION_NAMES):
-    return [tokenizer.encode(action, add_special_tokens=False) for action in action_texts]
+    return [
+        tokenizer.encode(action, add_special_tokens=False)
+        for action in action_token_texts(action_texts)
+    ]
 
 
 def single_token_action_ids(action_ids_list):
