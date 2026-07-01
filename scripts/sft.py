@@ -56,8 +56,7 @@ def default_dataset_path(env_size):
 
 
 def default_output_dir(env_size):
-    return f"checkpoints/sft_adapter_{env_size}x{env_size}"
-
+    return f"checkpoints/sft_adapter_{env_size}x{env_size}/epoch-3"
 
 args = parse_args()
 experiment_name = f"{args.env_size}x{args.env_size}"

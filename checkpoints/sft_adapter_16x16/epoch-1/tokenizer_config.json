@@ -25,6 +25,7 @@
     "<empty_output>"
   ],
   "is_local": false,
+  "local_files_only": false,
   "model_max_length": 8192,
   "pad_token": "<|endoftext|>",
   "tokenizer_class": "GPT2Tokenizer",
