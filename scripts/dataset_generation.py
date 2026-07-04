@@ -9,38 +9,35 @@ from tqdm import tqdm
 from _bootstrap import bootstrap
 bootstrap()
 
+from vlm_minigrid_rl.experiment_config import (
+    DEFAULT_ENV_SIZE,
+    DEFAULT_NUM_DATASET_EPISODES,
+    DEFAULT_SEED,
+    DEFAULT_TILE_SIZE,
+    dataset_dir,
+)
 from vlm_minigrid_rl.minigrid_utils import choose_balanced_shortest_path, create_minigrid_env, reset_env_with_goal, turn_balance
 from vlm_minigrid_rl.paths import project_path
 from vlm_minigrid_rl.training_utils import GOAL_COLORS, ID_TO_ACTION, build_navigation_prompt
 
-ENV_SIZE = 8
-NUM_EPISODES = 1000
-TILE_SIZE = 32
-SEED_BASE = 42
-SAVE_PATH = "datasets/dataset_8x8"
-
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate MiniGrid expert trajectories.")
-    parser.add_argument("--env-size", type=int, default=8, choices=[8, 16])
-    parser.add_argument("--num-episodes", type=int, default=NUM_EPISODES)
-    parser.add_argument("--tile-size", type=int, default=TILE_SIZE)
-    parser.add_argument("--seed-base", type=int, default=SEED_BASE)
+    parser.add_argument("--env-size", type=int, default=DEFAULT_ENV_SIZE, choices=[8, 16])
+    parser.add_argument("--num-episodes", type=int, default=DEFAULT_NUM_DATASET_EPISODES)
+    parser.add_argument("--tile-size", type=int, default=DEFAULT_TILE_SIZE)
+    parser.add_argument("--seed-base", type=int, default=DEFAULT_SEED)
     parser.add_argument("--save-path", default=None)
     parser.add_argument("--goal-color", default="green", choices=GOAL_COLORS)
     parser.add_argument("--prompt-goal-color", default=None, choices=GOAL_COLORS)
     return parser.parse_args()
 
 
-def default_dataset_path(env_size):
-    return f"datasets/dataset_{env_size}x{env_size}"
-
-
 def main():
     args = parse_args()
     env_size = args.env_size
     prompt_goal_color = args.prompt_goal_color or args.goal_color
-    save_path = project_path(args.save_path or default_dataset_path(env_size))
+    save_path = project_path(args.save_path) if args.save_path else dataset_dir(env_size)
     env_id = f"MiniGrid-Empty-{env_size}x{env_size}-v0"
     prompt = build_navigation_prompt(prompt_goal_color)
     print(f"Создаём датасет: {env_id}, goal_color={args.goal_color}, prompt_goal_color={prompt_goal_color}")

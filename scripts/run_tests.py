@@ -10,17 +10,23 @@ from _bootstrap import bootstrap
 
 bootstrap()
 
+from vlm_minigrid_rl.experiment_config import (
+    DEFAULT_EVAL_EPISODES,
+    DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE,
+    DEFAULT_SEED,
+    DEFAULT_SFT_EPOCHS,
+    dataset_dir,
+    default_val_split,
+    grpo_adapter_root,
+    resolve_grpo_adapter_path,
+    resolve_sft_adapter_path,
+    sft_adapter_root,
+)
 from vlm_minigrid_rl.paths import project_path
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 TEST_MODELS_SCRIPT = SCRIPT_DIR / "test_models.py"
-
-DEFAULT_EPISODES = 250
-DEFAULT_SEED = 42
-DEFAULT_SFT_EPOCH = 3
-DEFAULT_GRPO_EPISODE = {8: 100, 16: 75}
-DEFAULT_VAL_SPLIT = {8: 0.1, 16: 0.01}
 
 PIPELINE_SUITES = {
     "8x8": [
@@ -152,26 +158,6 @@ def parse_int_list(value: str) -> list[int]:
     return [int(item.strip()) for item in value.split(",") if item.strip()]
 
 
-def default_adapter_root(kind: str, train_env: int) -> Path:
-    return project_path(f"checkpoints/{kind}_adapter_{train_env}x{train_env}")
-
-
-def resolve_sft_adapter(root: Path, epoch: int) -> Path | None:
-    adapter_path = root / f"epoch-{epoch}"
-    if adapter_path.is_dir() and (adapter_path / "adapter_config.json").exists():
-        return adapter_path
-    return None
-
-
-def resolve_grpo_adapter(root: Path, episode: int) -> Path | None:
-    episode_path = root / f"episode-{episode}"
-    if episode_path.is_dir() and (episode_path / "adapter_config.json").exists():
-        return episode_path
-    if episode == 0 and root.is_dir() and (root / "adapter_config.json").exists():
-        return root
-    return None
-
-
 def focal_train_envs(pipeline: str) -> set[int]:
     if pipeline == "8x8":
         return {8}
@@ -243,7 +229,7 @@ def build_test_models_command(
         "--env-size",
         str(eval_env),
         "--dataset-path",
-        str(project_path(f"datasets/dataset_{eval_env}x{eval_env}")),
+        str(dataset_dir(eval_env)),
         "--sft-adapter-path",
         str(sft_adapter_path),
         "--grpo-adapter-path",
@@ -251,7 +237,7 @@ def build_test_models_command(
         "--episodes",
         str(episodes),
         "--val-split",
-        str(DEFAULT_VAL_SPLIT[eval_env]),
+        str(default_val_split(eval_env)),
         "--goal-color",
         goal_color,
         "--prompt-goal-color",
@@ -291,8 +277,8 @@ def plan_runs(config: RunConfig) -> tuple[list[TestRun], list[str]]:
                 config.baseline_sft_epoch,
                 config.baseline_grpo_episode,
             ):
-                sft_path = resolve_sft_adapter(sft_root, sft_epoch)
-                grpo_path = resolve_grpo_adapter(grpo_root, grpo_episode)
+                sft_path = resolve_sft_adapter_path(train_env, sft_epoch, root=sft_root)
+                grpo_path = resolve_grpo_adapter_path(train_env, grpo_episode, root=grpo_root)
                 if sft_path is None:
                     warnings.append(
                         f"Skip {suite_name} (train {train_env}x{train_env}): "
@@ -451,11 +437,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Comma-separated suite names overriding --pipeline defaults.",
     )
-    parser.add_argument("--episodes", type=int, default=DEFAULT_EPISODES)
+    parser.add_argument("--episodes", type=int, default=DEFAULT_EVAL_EPISODES)
     parser.add_argument("--seeds", default=str(DEFAULT_SEED), help="Comma-separated seeds.")
     parser.add_argument(
         "--sft-epochs",
-        default=str(DEFAULT_SFT_EPOCH),
+        default=str(DEFAULT_SFT_EPOCHS),
         help="Comma-separated SFT epochs for focal pipeline(s).",
     )
     parser.add_argument(
@@ -489,16 +475,24 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="SFT epoch for non-focal transfer baselines (both envs if per-env flags omitted).",
     )
-    parser.add_argument("--baseline-sft-epoch-8x8", type=int, default=DEFAULT_SFT_EPOCH)
-    parser.add_argument("--baseline-sft-epoch-16x16", type=int, default=DEFAULT_SFT_EPOCH)
+    parser.add_argument("--baseline-sft-epoch-8x8", type=int, default=DEFAULT_SFT_EPOCHS)
+    parser.add_argument("--baseline-sft-epoch-16x16", type=int, default=DEFAULT_SFT_EPOCHS)
     parser.add_argument(
         "--baseline-grpo-episode",
         type=int,
         default=None,
         help="GRPO episode for non-focal transfer baselines (both envs if per-env flags omitted).",
     )
-    parser.add_argument("--baseline-grpo-episode-8x8", type=int, default=DEFAULT_GRPO_EPISODE[8])
-    parser.add_argument("--baseline-grpo-episode-16x16", type=int, default=DEFAULT_GRPO_EPISODE[16])
+    parser.add_argument(
+        "--baseline-grpo-episode-8x8",
+        type=int,
+        default=DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE[8],
+    )
+    parser.add_argument(
+        "--baseline-grpo-episode-16x16",
+        type=int,
+        default=DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE[16],
+    )
     parser.add_argument("--sft-root-8x8", default=None)
     parser.add_argument("--grpo-root-8x8", default=None)
     parser.add_argument("--sft-root-16x16", default=None)
@@ -537,11 +531,11 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
         raise ValueError(f"Unknown suites: {unknown}. Use --list-suites to see valid names.")
 
     default_grpo = (
-        str(DEFAULT_GRPO_EPISODE[8])
+        str(DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE[8])
         if args.pipeline == "8x8"
-        else str(DEFAULT_GRPO_EPISODE[16])
+        else str(DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE[16])
         if args.pipeline == "16x16"
-        else f"{DEFAULT_GRPO_EPISODE[8]},{DEFAULT_GRPO_EPISODE[16]}"
+        else f"{DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE[8]},{DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE[16]}"
     )
     grpo_default = args.grpo_episodes or default_grpo
 
@@ -580,10 +574,10 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
     )
 
     adapter_roots = {
-        ("sft", 8): project_path(args.sft_root_8x8 or default_adapter_root("sft", 8)),
-        ("grpo", 8): project_path(args.grpo_root_8x8 or default_adapter_root("grpo", 8)),
-        ("sft", 16): project_path(args.sft_root_16x16 or default_adapter_root("sft", 16)),
-        ("grpo", 16): project_path(args.grpo_root_16x16 or default_adapter_root("grpo", 16)),
+        ("sft", 8): project_path(args.sft_root_8x8) if args.sft_root_8x8 else sft_adapter_root(8),
+        ("grpo", 8): project_path(args.grpo_root_8x8) if args.grpo_root_8x8 else grpo_adapter_root(8),
+        ("sft", 16): project_path(args.sft_root_16x16) if args.sft_root_16x16 else sft_adapter_root(16),
+        ("grpo", 16): project_path(args.grpo_root_16x16) if args.grpo_root_16x16 else grpo_adapter_root(16),
     }
 
     return RunConfig(

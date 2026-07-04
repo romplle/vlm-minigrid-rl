@@ -12,6 +12,18 @@ from tqdm import tqdm
 from _bootstrap import bootstrap
 bootstrap()
 
+from vlm_minigrid_rl.experiment_config import (
+    BASE_MODEL_ID,
+    DEFAULT_ENV_SIZE,
+    DEFAULT_SEED,
+    DEFAULT_SFT_EPOCHS,
+    DEFAULT_VAL_SAMPLES,
+    WANDB_PROJECT,
+    dataset_dir,
+    default_val_split,
+    env_label,
+    sft_adapter_root,
+)
 from vlm_minigrid_rl.model_utils import (
     evaluate_action_accuracy,
     load_sft_training_model,
@@ -22,59 +34,45 @@ from vlm_minigrid_rl.paths import project_path
 from vlm_minigrid_rl.training_utils import majority_action_baseline, set_global_seed, split_dataset_by_episode
 
 
-MODEL_ID = "lusxvr/nanoVLM-222M"
-DATASET_PATH = "datasets/dataset_8x8"
-OUTPUT_DIR = "checkpoints/sft_adapter_8x8"
-
 BATCH_SIZE = 6
 GRAD_ACCUM = 8
-EPOCHS = 3
 LR = 2e-5
 MAX_SEQ_LEN = 256
 USE_WANDB = True
-VAL_SAMPLES = 100
-SEED = 42
-VAL_SPLIT = 0.1
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train NanoVLM with SFT on MiniGrid expert data.")
-    parser.add_argument("--env-size", type=int, default=8, choices=[8, 16])
+    parser.add_argument("--env-size", type=int, default=DEFAULT_ENV_SIZE, choices=[8, 16])
     parser.add_argument("--dataset-path", default=None)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--val-split", type=float, default=None)
-    parser.add_argument("--val-samples", type=int, default=VAL_SAMPLES)
+    parser.add_argument("--val-samples", type=int, default=DEFAULT_VAL_SAMPLES)
     parser.add_argument("--lr", type=float, default=LR)
     parser.add_argument("--wandb-name", default=None)
     parser.add_argument("--no-wandb", action="store_true")
     return parser.parse_args()
 
 
-def default_dataset_path(env_size):
-    return f"datasets/dataset_{env_size}x{env_size}"
-
-
-def default_output_dir(env_size):
-    return f"checkpoints/sft_adapter_{env_size}x{env_size}/epoch-3"
-
 args = parse_args()
-experiment_name = f"{args.env_size}x{args.env_size}"
-DATASET_PATH = str(project_path(args.dataset_path or default_dataset_path(args.env_size)))
-OUTPUT_DIR = str(project_path(args.output_dir or default_output_dir(args.env_size)))
-EPOCHS = args.epochs if args.epochs is not None else EPOCHS
-VAL_SPLIT = args.val_split if args.val_split is not None else VAL_SPLIT
+experiment_name = env_label(args.env_size)
+DATASET_PATH = str(project_path(args.dataset_path) if args.dataset_path else dataset_dir(args.env_size))
+OUTPUT_DIR = str(project_path(args.output_dir) if args.output_dir else sft_adapter_root(args.env_size))
+EPOCHS = args.epochs if args.epochs is not None else DEFAULT_SFT_EPOCHS
+VAL_SPLIT = args.val_split if args.val_split is not None else default_val_split(args.env_size)
 VAL_SAMPLES = args.val_samples
 LR = args.lr
 USE_WANDB = USE_WANDB and not args.no_wandb
+SEED = DEFAULT_SEED
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 set_global_seed(SEED)
 
 if USE_WANDB:
-    wandb.init(project="nanoVLM-minigrid", name=args.wandb_name or f"sft-{experiment_name}")
+    wandb.init(project=WANDB_PROJECT, name=args.wandb_name or f"sft-{experiment_name}")
 
-model, tokenizer, image_processor = load_sft_training_model(MODEL_ID)
+model, tokenizer, image_processor = load_sft_training_model(BASE_MODEL_ID)
 
 lora_config = LoraConfig(
     r=64,

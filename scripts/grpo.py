@@ -13,6 +13,20 @@ from bitsandbytes.optim import AdamW8bit
 from _bootstrap import bootstrap
 bootstrap()
 
+from vlm_minigrid_rl.experiment_config import (
+    BASE_MODEL_ID,
+    DEFAULT_ENV_SIZE,
+    DEFAULT_GRPO_CHECKPOINT_INTERVAL,
+    DEFAULT_GRPO_TRAIN_EPISODES,
+    DEFAULT_SEED,
+    DEFAULT_TILE_SIZE,
+    WANDB_PROJECT,
+    dataset_dir,
+    default_val_split,
+    env_label,
+    grpo_adapter_root,
+    sft_adapter_epoch_dir,
+)
 from vlm_minigrid_rl.minigrid_utils import create_minigrid_env, default_max_steps, reset_env_with_goal
 from vlm_minigrid_rl.model_utils import (
     action_token_ids,
@@ -34,40 +48,29 @@ from vlm_minigrid_rl.training_utils import (
 )
 
 
-OUTPUT_DIR = "checkpoints/grpo_adapter_8x8"
-SFT_ADAPTER_PATH = "checkpoints/sft_adapter_8x8"
-DATASET_PATH = "datasets/dataset_8x8"
-ENV_SIZE = 8
-TILE_SIZE = 32
-
 G = 16
-EPISODES = 100
-CHECKPOINT_INTERVAL = 25
-MAX_STEPS = 12
 LR = 2e-5
 EPSILON = 0.2
 BETA = 0.05
 LORA_DROPOUT = 0.05
 USE_WANDB = True
-SEED = 42
-VAL_SPLIT = 0.1
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train NanoVLM with GRPO-style RL in MiniGrid.")
-    parser.add_argument("--env-size", type=int, default=8, choices=[8, 16])
+    parser.add_argument("--env-size", type=int, default=DEFAULT_ENV_SIZE, choices=[8, 16])
     parser.add_argument("--dataset-path", default=None)
     parser.add_argument("--sft-adapter-path", default=None)
     parser.add_argument("--output-dir", default=None)
-    parser.add_argument("--episodes", type=int, default=EPISODES)
-    parser.add_argument("--checkpoint-interval", type=int, default=CHECKPOINT_INTERVAL)
+    parser.add_argument("--episodes", type=int, default=DEFAULT_GRPO_TRAIN_EPISODES)
+    parser.add_argument("--checkpoint-interval", type=int, default=DEFAULT_GRPO_CHECKPOINT_INTERVAL)
     parser.add_argument("--max-steps", type=int, default=None)
-    parser.add_argument("--val-split", type=float, default=VAL_SPLIT)
+    parser.add_argument("--val-split", type=float, default=None)
     parser.add_argument("--lr", type=float, default=LR)
     parser.add_argument("--epsilon", type=float, default=EPSILON)
     parser.add_argument("--beta", type=float, default=BETA)
     parser.add_argument("--lora-dropout", type=float, default=LORA_DROPOUT)
-    parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--goal-color", default="green", choices=GOAL_COLORS)
     parser.add_argument("--prompt-goal-color", default=None, choices=GOAL_COLORS)
     parser.add_argument("--wandb-name", default=None)
@@ -75,27 +78,17 @@ def parse_args():
     return parser.parse_args()
 
 
-def default_dataset_path(env_size):
-    return f"datasets/dataset_{env_size}x{env_size}"
-
-
-def default_sft_adapter_path(env_size):
-    return f"checkpoints/sft_adapter_{env_size}x{env_size}"
-
-
-def default_grpo_adapter_path(env_size):
-    return f"checkpoints/grpo_adapter_{env_size}x{env_size}"
-
-
 args = parse_args()
 ENV_SIZE = args.env_size
-DATASET_PATH = str(project_path(args.dataset_path or default_dataset_path(ENV_SIZE)))
-SFT_ADAPTER_PATH = str(project_path(args.sft_adapter_path or default_sft_adapter_path(ENV_SIZE)))
-OUTPUT_DIR = str(project_path(args.output_dir or default_grpo_adapter_path(ENV_SIZE)))
+DATASET_PATH = str(project_path(args.dataset_path) if args.dataset_path else dataset_dir(ENV_SIZE))
+SFT_ADAPTER_PATH = str(
+    project_path(args.sft_adapter_path) if args.sft_adapter_path else sft_adapter_epoch_dir(ENV_SIZE)
+)
+OUTPUT_DIR = str(project_path(args.output_dir) if args.output_dir else grpo_adapter_root(ENV_SIZE))
 EPISODES = args.episodes
 CHECKPOINT_INTERVAL = args.checkpoint_interval
 MAX_STEPS = args.max_steps if args.max_steps is not None else default_max_steps(ENV_SIZE)
-VAL_SPLIT = args.val_split
+VAL_SPLIT = args.val_split if args.val_split is not None else default_val_split(ENV_SIZE)
 LR = args.lr
 EPSILON = args.epsilon
 BETA = args.beta
@@ -109,9 +102,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 set_global_seed(SEED)
 
 if USE_WANDB:
-    wandb.init(project="nanoVLM-minigrid", name=args.wandb_name or f"grpo-{ENV_SIZE}x{ENV_SIZE}")
-
-BASE_MODEL_ID = "lusxvr/nanoVLM-222M"
+    wandb.init(project=WANDB_PROJECT, name=args.wandb_name or f"grpo-{env_label(ENV_SIZE)}")
 
 ref_model, tokenizer, image_processor = load_vlm_model(
     BASE_MODEL_ID, SFT_ADAPTER_PATH, DEVICE, is_trainable=False
@@ -156,7 +147,7 @@ def save_checkpoint(save_dir):
 
 # GRPO
 global_step = 0
-env = create_minigrid_env(ENV_SIZE, tile_size=TILE_SIZE)
+env = create_minigrid_env(ENV_SIZE, tile_size=DEFAULT_TILE_SIZE)
 rng = random.Random(SEED)
 
 for episode in range(EPISODES):
