@@ -1,4 +1,5 @@
 import argparse
+import json
 
 import torch
 from datasets import load_from_disk
@@ -50,7 +51,12 @@ def parse_args():
     parser.add_argument("--goal-color", default="green", choices=GOAL_COLORS)
     parser.add_argument("--prompt-goal-color", default=None, choices=GOAL_COLORS)
     parser.add_argument("--skip-base", action="store_true")
+    parser.add_argument("--skip-sft", action="store_true")
     parser.add_argument("--skip-grpo", action="store_true")
+    parser.add_argument("--skip-majority", action="store_true")
+    parser.add_argument("--skip-expert", action="store_true")
+    parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument("--output-json", default=None, help="Write policy metrics to a JSON file.")
     return parser.parse_args()
 
 
@@ -76,6 +82,7 @@ MAX_STEPS = args.max_steps if args.max_steps is not None else default_max_steps(
 VAL_SPLIT = args.val_split
 GOAL_COLOR = args.goal_color
 PROMPT_GOAL_COLOR = args.prompt_goal_color or args.goal_color
+SEED = args.seed
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 set_global_seed(SEED)
@@ -123,35 +130,43 @@ if __name__ == "__main__":
         if DEVICE == "cuda":
             torch.cuda.empty_cache()
 
-    print("\n=== Оценка SFT Модели ===")
-    sft_model, tokenizer, image_processor = load_vlm_model(
-        BASE_MODEL_ID, SFT_ADAPTER_PATH, DEVICE, is_trainable=False
-    )
-    sft_result = evaluate_model_in_env(
-        sft_model,
-        tokenizer,
-        image_processor,
-        test_prompt,
-        ENV_SIZE,
-        TILE_SIZE,
-        MAX_STEPS,
-        SEED,
-        DEVICE,
-        "SFT",
-        episodes=TEST_EPISODES,
-        goal_color=GOAL_COLOR,
-    )
+    tokenizer = None
+    image_processor = None
 
-    results.append(("SFT", sft_result))
+    if not args.skip_sft:
+        print("\n=== Оценка SFT Модели ===")
+        sft_model, tokenizer, image_processor = load_vlm_model(
+            BASE_MODEL_ID, SFT_ADAPTER_PATH, DEVICE, is_trainable=False
+        )
+        sft_result = evaluate_model_in_env(
+            sft_model,
+            tokenizer,
+            image_processor,
+            test_prompt,
+            ENV_SIZE,
+            TILE_SIZE,
+            MAX_STEPS,
+            SEED,
+            DEVICE,
+            "SFT",
+            episodes=TEST_EPISODES,
+            goal_color=GOAL_COLOR,
+        )
+        results.append(("SFT", sft_result))
+        del sft_model
+        if DEVICE == "cuda":
+            torch.cuda.empty_cache()
 
     if not args.skip_grpo:
         print("\n=== Оценка GRPO Модели ===")
-        grpo_model, _, _ = load_vlm_model_with_adapters(
+        grpo_model, grpo_tokenizer, grpo_image_processor = load_vlm_model_with_adapters(
             BASE_MODEL_ID,
             [SFT_ADAPTER_PATH, GRPO_ADAPTER_PATH],
             DEVICE,
             is_trainable=False,
         )
+        tokenizer = tokenizer or grpo_tokenizer
+        image_processor = image_processor or grpo_image_processor
         grpo_result = evaluate_model_in_env(
             grpo_model,
             tokenizer,
@@ -167,28 +182,59 @@ if __name__ == "__main__":
             goal_color=GOAL_COLOR,
         )
         results.append(("GRPO", grpo_result))
+        del grpo_model
+        if DEVICE == "cuda":
+            torch.cuda.empty_cache()
 
-    majority_result = evaluate_fixed_action_in_env(
-        majority["action"],
-        ACTION_TO_ID[majority["action"]],
-        ENV_SIZE,
-        TILE_SIZE,
-        MAX_STEPS,
-        SEED,
-        episodes=TEST_EPISODES,
-        goal_color=GOAL_COLOR,
-    )
-    expert_result = evaluate_expert_in_env(
-        ENV_SIZE,
-        TILE_SIZE,
-        MAX_STEPS,
-        SEED,
-        episodes=TEST_EPISODES,
-        goal_color=GOAL_COLOR,
-    )
+    comparison_rows = []
+    if not args.skip_majority:
+        majority_result = evaluate_fixed_action_in_env(
+            majority["action"],
+            ACTION_TO_ID[majority["action"]],
+            ENV_SIZE,
+            TILE_SIZE,
+            MAX_STEPS,
+            SEED,
+            episodes=TEST_EPISODES,
+            goal_color=GOAL_COLOR,
+        )
+        comparison_rows.append(("Majority baseline", majority_result))
+    comparison_rows.extend(results)
+    if not args.skip_expert:
+        expert_result = evaluate_expert_in_env(
+            ENV_SIZE,
+            TILE_SIZE,
+            MAX_STEPS,
+            SEED,
+            episodes=TEST_EPISODES,
+            goal_color=GOAL_COLOR,
+        )
+        comparison_rows.append(("Expert BFS upper bound", expert_result))
 
-    print_comparison_table([
-        ("Majority baseline", majority_result),
-        *results,
-        ("Expert BFS upper bound", expert_result),
-    ])
+    if comparison_rows:
+        print_comparison_table(comparison_rows)
+
+    if args.output_json:
+        payload = {
+            "config": {
+                "env_size": ENV_SIZE,
+                "dataset_path": DATASET_PATH,
+                "sft_adapter_path": SFT_ADAPTER_PATH,
+                "grpo_adapter_path": GRPO_ADAPTER_PATH,
+                "episodes": TEST_EPISODES,
+                "max_steps": MAX_STEPS,
+                "val_split": VAL_SPLIT,
+                "goal_color": GOAL_COLOR,
+                "prompt_goal_color": PROMPT_GOAL_COLOR,
+                "seed": SEED,
+            },
+            "policies": [
+                {"name": name, "metrics": metrics}
+                for name, metrics in comparison_rows
+            ],
+        }
+        output_path = project_path(args.output_json)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, ensure_ascii=False)
+        print(f"\nSaved metrics to {output_path}")
