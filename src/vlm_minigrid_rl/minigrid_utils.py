@@ -107,6 +107,7 @@ def empty_metrics():
         "total_reward": 0.0,
         "total_steps_in_success": 0,
         "timeouts": 0,
+        "invalid_action_episodes": 0,
         "actions": {"left": 0, "right": 0, "forward": 0},
     }
 
@@ -126,6 +127,7 @@ def finalize_metrics(metrics, episodes):
         "avg_reward": avg_reward,
         "avg_steps_success": avg_steps,
         "timeouts": metrics["timeouts"],
+        "invalid_action_episodes": metrics["invalid_action_episodes"],
         "episodes": episodes,
         "action_dist": action_dist,
     }
@@ -138,6 +140,7 @@ def print_metrics(model_name, result):
     print(f"Average Reward:  {result['avg_reward']:.3f}")
     print(f"Avg Steps (Win): {result['avg_steps_success']:.1f}")
     print(f"Timeouts:        {result['timeouts']}/{result['episodes']}")
+    print(f"Invalid actions: {result['invalid_action_episodes']}/{result['episodes']}")
     print(
         "Action Dist:     "
         f"L:{action_dist['left']:.1f}% | "
@@ -150,12 +153,13 @@ def print_comparison_table(results):
     print("\n===============================")
     print("ИТОГОВОЕ СРАВНЕНИЕ")
     print("===============================")
-    print("| Policy | Success Rate | Avg Reward | Avg Steps (Win) | Timeouts |")
-    print("|---|---:|---:|---:|---:|")
+    print("| Policy | Success Rate | Avg Reward | Avg Steps (Win) | Timeouts | Invalid actions |")
+    print("|---|---:|---:|---:|---:|---:|")
     for name, result in results:
         print(
             f"| {name} | {result['success_rate']:.1f}% | {result['avg_reward']:.3f} | "
-            f"{result['avg_steps_success']:.1f} | {result['timeouts']}/{result['episodes']} |"
+            f"{result['avg_steps_success']:.1f} | {result['timeouts']}/{result['episodes']} | "
+            f"{result['invalid_action_episodes']}/{result['episodes']} |"
         )
     print("===============================")
 
@@ -203,8 +207,9 @@ def evaluate_model_in_env(
                 prompt,
                 device,
             )
-            if action_name is None:
-                action_name = "forward"
+            if action_name is None or action_idx is None:
+                metrics["invalid_action_episodes"] += 1
+                break
 
             obs, reward, terminated, truncated, _ = env.step(action_idx)
             episode_reward += reward

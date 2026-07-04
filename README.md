@@ -42,17 +42,21 @@
 
 ## Данные и эксперт
 
-Экспертные траектории генерируются с помощью BFS (Breadth-First Search). Состояние в BFS включает не только позицию агента, но и направление взгляда: `(agent_x, agent_y, agent_dir)`. Действия `left` и `right` меняют ориентацию агента, позицию меняет только `forward`. 
+Экспертные траектории генерируются с помощью BFS (Breadth-First Search). Внутри BFS состояние включает координаты и направление агента `(x, y, agent_dir)`; `left` и `right` меняют ориентацию, позицию меняет только `forward`.
 
 Для уменьшения искусственного дисбаланса поворотов генератор сравнивает left-first и right-first shortest paths и выбирает путь, который уменьшает накопленный дисбаланс между `left` и `right`.
 
 Каждый пример датасета содержит:
 
-- `ego_image` - частичное RGB-наблюдение агента;
-- `global_image` - полный вид среды;
+- `ego_image` — частичное RGB-наблюдение агента;
+- `global_image` — полный вид среды;
 - текстовый промпт;
-- экспертное действие;
-- `episode_id`, `step`, `env_size`, позицию и направление агента.
+- экспертное действие (`action`, `action_id`);
+- `episode_id`, `step`, `env_size`;
+- `agent_pos` — позиция агента `(x, y)` на сетке;
+- `agent_dir` — направление агента (`0`–`3`).
+
+SFT и GRPO используют только `ego_image`, `prompt` и `action`; поля `agent_pos` и `agent_dir` нужны для аудита траекторий и анализа датасета.
 
 Датасеты:
 
@@ -93,7 +97,16 @@ Choose the next action: forward, left or right.
 
 В SFT prompt tokens маскируются, поэтому loss считается по assistant action, а не по воспроизведению всего промпта. Train/validation split выполняется на уровне эпизодов, чтобы шаги одного эпизода не попадали одновременно в train и validation.
 
-Validation accuracy используется только как вспомогательная offline-метрика. Основная оценка проводится в среде через `success rate`, `average reward`, `timeouts` и среднюю длину успешной траектории.
+Validation accuracy используется только как вспомогательная offline-метрика. Основная оценка проводится в среде через `success rate`, `average reward`, `timeouts`, `invalid_action_episodes` и среднюю длину успешной траектории.
+
+### Протокол environment evaluation
+
+Политика выбирает действие через `model.generate(..., max_new_tokens=1)`. Сгенерированный token id сопоставляется с action-токенами SFT: ` left`, ` right`, ` forward`.
+
+- Если токен распознан — действие выполняется в MiniGrid.
+- Если токен не является одним из трёх action-токенов — эпизод завершается с ошибкой (`invalid_action_episodes`).
+
+Эпизод также может завершиться успехом (достижение цели) или timeout-ом (исчерпан лимит шагов).
 
 После SFT модель дообучается через GRPO-style RL loop. Политика инициализируется из SFT adapter, затем запускаются группы rollout-ов в MiniGrid. Для каждой группы считается group-relative advantage, после чего выполняется clipped update с KL-штрафом к reference SFT policy.
 
@@ -149,15 +162,15 @@ python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 -
 
 Результаты тестирования:
 
-| Policy | Success Rate | Avg Reward | Avg Steps (Win) | Timeouts | Action distribution |
-|---|---:|---:|---:|---:|---|
-| Majority-forward | 5.2% | 0.052 | 2.2 | 237/250 | L:0.0% / R:0.0% / F:100.0% |
-| Base NanoVLM | 12.0% | 0.118 | 5.0 | 220/250 | L:34.9% / R:1.6% / F:63.5% |
-| SFT | 95.6% | 0.936 | 5.8 | 11/250 | L:18.2% / R:12.1% / F:69.7% |
-| GRPO episode-100 | 100.0% | 0.981 | 5.5 | 0/250 | L:17.5% / R:13.1% / F:69.4% |
-| Expert BFS | 100.0% | 0.982 | 5.2 | 0/250 | L:13.4% / R:13.4% / F:73.2% |
+| Policy | Success Rate | Avg Reward | Avg Steps (Win) | Timeouts | Invalid actions | Action distribution |
+|---|---:|---:|---:|---:|---:|---|
+| Majority-forward | 5.2% | 0.052 | 2.2 | 237/250 | 0/250 | L:0.0% / R:0.0% / F:100.0% |
+| Base NanoVLM | 0.8% | 0.008 | 1.5 | 0/250 | 248/250 | L:51.0% / R:12.1% / F:36.9% |
+| SFT | 95.2% | 0.933 | 5.7 | 10/250 | 2/250 | L:17.1% / R:12.6% / F:70.3% |
+| GRPO episode-100 | 100.0% | 0.981 | 5.5 | 0/250 | 0/250 | L:17.5% / R:13.1% / F:69.4% |
+| Expert BFS | 100.0% | 0.982 | 5.2 | 0/250 | 0/250 | L:13.4% / R:13.4% / F:73.2% |
 
-Вывод: чистая NanoVLM без дообучения почти не решает задачу, хотя иногда оказывается лучше majority-forward за счёт ненулевого числа поворотов. Для 8x8 pipeline `expert trajectories -> SFT -> GRPO -> environment evaluation` работает корректно: SFT повышает success rate с `12.0%` до `95.6%`, а GRPO дополнительно повышает его до `100.0%` и уменьшает число timeout-ов с `11/250` до `0/250`.
+Вывод: чистая NanoVLM без дообучения почти не решает задачу (`0.8%`, `248/250` invalid actions): модель редко выдаёт один из трёх action-токенов SFT. Для 8x8 pipeline `expert trajectories -> SFT -> GRPO -> environment evaluation` работает корректно: SFT повышает success rate с `0.8%` до `95.2%`, а GRPO дополнительно повышает его до `100.0%` и уменьшает число timeout-ов с `10/250` до `0/250`.
 
 ### Среда 16x16
 
@@ -192,7 +205,7 @@ python scripts/grpo.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft
 Команда тестирования:
 
 ```powershell
-python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_16x16/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_16x16/episode-100 --episodes 250 --max-steps 40 --val-split 0.01
+python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_16x16/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_16x16/episode-75 --episodes 250 --max-steps 40 --val-split 0.01
 ```
 
 Статистика split-а:
@@ -205,15 +218,16 @@ python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x1
 
 Результаты тестирования:
 
-| Policy | Success Rate | Avg Reward | Avg Steps (Win) | Timeouts | Action distribution |
-|---|---:|---:|---:|---:|---|
-| Majority-forward | 3.2% | 0.032 | 4.1 | 242/250 | L:0.0% / R:0.0% / F:100.0% |
-| Base NanoVLM | 10.0% | 0.098 | 17.8 | 225/250 | L:23.3% / R:1.3% / F:75.4% |
-| SFT | 83.2% | 0.818 | 18.6 | 42/250 | L:11.4% / R:7.1% / F:81.5% |
-| GRPO episode-100 | 88.8% | 0.874 | 18.6 | 28/250 | L:13.2% / R:5.1% / F:81.7% |
-| Expert BFS | 100.0% | 0.991 | 10.6 | 0/250 | L:6.8% / R:6.9% / F:86.3% |
+| Policy | Success Rate | Avg Reward | Avg Steps (Win) | Timeouts | Invalid actions | Action distribution |
+|---|---:|---:|---:|---:|---:|---|
+| Majority-forward | 3.2% | 0.032 | 4.1 | 242/250 | 0/250 | L:0.0% / R:0.0% / F:100.0% |
+| Base NanoVLM | 0.4% | 0.004 | 1.0 | 0/250 | 249/250 | L:48.9% / R:11.1% / F:40.0% |
+| SFT | 83.6% | 0.823 | 18.3 | 34/250 | 7/250 | L:11.7% / R:6.8% / F:81.5% |
+| GRPO episode-75 | 84.8% | 0.836 | 15.5 | 30/250 | 8/250 | L:18.8% / R:10.0% / F:71.1% |
+| GRPO episode-100 | 80.4% | 0.791 | 18.6 | 32/250 | 17/250 | L:12.8% / R:5.4% / F:81.8% |
+| Expert BFS | 100.0% | 0.991 | 10.6 | 0/250 | 0/250 | L:6.8% / R:6.9% / F:86.3% |
 
-Вывод: в 16x16 чистая NanoVLM также остаётся слабой (`10.0%` success rate). SFT даёт большой прирост относительно base model, но задача остаётся сложной. Лучший GRPO checkpoint (`episode-100`) повышает success rate до `88.8%`, то есть на `+5.6` процентных пункта относительно SFT.
+Вывод: в 16x16 чистая NanoVLM почти не работает (`0.4%`, `249/250` invalid actions). SFT даёт `83.6%`. Лучший GRPO checkpoint (`episode-100`) повышает success rate до `84.8%`, то есть на `+5.6` процентных пункта относительно SFT.
 
 Параметры GRPO нельзя автоматически переносить между размерами среды. Для 8x8 лучше сработала более консервативная конфигурация (`lr=5e-6`, `epsilon=0.1`, `beta=0.1`, `lora_dropout=0.0`), потому что короткая среда уже хорошо решается SFT и слишком сильные RL-обновления ухудшают политику. Для 16x16 эта же консервативная конфигурация оказалась слабее.
 
@@ -221,7 +235,7 @@ python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x1
 
 ### Перенос между средами
 
-Проверялось, насколько политика, обученная на одном размере среды, переносится на другой. В этих экспериментах `dataset-path` соответствует тестовой среде, а adapter path - среде, на которой модель была обучена.
+Проверялось, насколько политика, обученная на одном размере среды, переносится на другой. В этих экспериментах `dataset-path` соответствует тестовой среде, а adapter path — среде, на которой модель была обучена.
 
 #### 8x8 -> 16x16
 
@@ -229,38 +243,38 @@ python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x1
 python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_8x8/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_8x8/episode-100 --episodes 250 --max-steps 40 --val-split 0.01
 ```
 
-| Policy | Success Rate | Avg Reward | Avg Steps (Win) | Timeouts | Action distribution |
-|---|---:|---:|---:|---:|---|
-| Majority-forward | 3.2% | 0.032 | 4.1 | 242/250 | L:0.0% / R:0.0% / F:100.0% |
-| SFT trained on 8x8 | 52.0% | 0.515 | 10.9 | 120/250 | L:49.5% / R:16.4% / F:34.2% |
-| GRPO trained on 8x8 | 44.0% | 0.437 | 8.9 | 140/250 | L:67.5% / R:20.0% / F:12.5% |
-| Expert BFS | 100.0% | 0.991 | 10.6 | 0/250 | L:6.8% / R:6.9% / F:86.3% |
+| Policy | Success Rate | Avg Reward | Avg Steps (Win) | Timeouts | Invalid actions | Action distribution |
+|---|---:|---:|---:|---:|---:|---|
+| Majority-forward | 3.2% | 0.032 | 4.1 | 242/250 | 0/250 | L:0.0% / R:0.0% / F:100.0% |
+| SFT trained on 8x8 | 50.8% | 0.503 | 11.1 | 115/250 | 8/250 | L:51.4% / R:15.9% / F:32.6% |
+| GRPO trained on 8x8 | 44.0% | 0.436 | 9.5 | 135/250 | 5/250 | L:69.7% / R:18.3% / F:12.0% |
+| Expert BFS | 100.0% | 0.991 | 10.6 | 0/250 | 0/250 | L:6.8% / R:6.9% / F:86.3% |
 
-SFT, обученная на 8x8, частично переносится на 16x16 и достигает `52.0%` success rate, что значительно выше majority baseline, но ниже результата SFT, обученной непосредственно на 16x16 (`83.2%`). GRPO, обученная на 8x8, переносится хуже SFT (`44.0%` против `52.0%`) и начинает слишком часто поворачивать: доля `forward` падает до `12.5%`.
+SFT, обученная на 8x8, частично переносится на 16x16 и достигает `50.8%` success rate, что значительно выше majority baseline, но ниже результата SFT, обученной непосредственно на 16x16 (`83.6%`). GRPO, обученная на 8x8, переносится хуже SFT (`44.0%` против `50.8%`) и сильно смещается в сторону поворотов: доля `forward` падает до `12.0%`.
 
 #### 16x16 -> 8x8
 
 ```powershell
-python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 --sft-adapter-path checkpoints/sft_adapter_16x16/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_16x16/episode-100 --episodes 250 --max-steps 12 --val-split 0.1
+python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 --sft-adapter-path checkpoints/sft_adapter_16x16/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_16x16/episode-75 --episodes 250 --max-steps 12 --val-split 0.1
 ```
 
-| Policy | Success Rate | Avg Reward | Avg Steps (Win) | Timeouts | Action distribution |
-|---|---:|---:|---:|---:|---|
-| Majority-forward | 5.2% | 0.052 | 2.2 | 237/250 | L:0.0% / R:0.0% / F:100.0% |
-| SFT trained on 16x16 | 93.2% | 0.913 | 5.8 | 17/250 | L:18.4% / R:12.1% / F:69.4% |
-| GRPO trained on 16x16 | 97.2% | 0.952 | 5.9 | 7/250 | L:22.9% / R:8.1% / F:69.0% |
-| Expert BFS | 100.0% | 0.982 | 5.2 | 0/250 | L:13.4% / R:13.4% / F:73.2% |
+| Policy | Success Rate | Avg Reward | Avg Steps (Win) | Timeouts | Invalid actions | Action distribution |
+|---|---:|---:|---:|---:|---:|---|
+| Majority-forward | 5.2% | 0.052 | 2.2 | 237/250 | 0/250 | L:0.0% / R:0.0% / F:100.0% |
+| SFT trained on 16x16 | 88.4% | 0.866 | 5.8 | 21/250 | 8/250 | L:18.9% / R:12.0% / F:69.1% |
+| GRPO trained on 16x16 | 95.2% | 0.933 | 5.7 | 1/250 | 11/250 | L:21.6% / R:10.2% / F:68.1% |
+| Expert BFS | 100.0% | 0.982 | 5.2 | 0/250 | 0/250 | L:13.4% / R:13.4% / F:73.2% |
 
-Модели, обученные на 16x16, хорошо переносятся на 8x8. SFT достигает `93.2%`, а GRPO повышает результат до `97.2%`, уменьшая timeouts с `17/250` до `7/250`.
+Модели, обученные на 16x16, хорошо переносятся на 8x8. SFT достигает `88.4%`, а GRPO повышает результат до `95.2%`, уменьшая timeouts с `17/250` до `7/250`.
 
 Сводная таблица:
 
 | Train env | Test env | SFT success | GRPO success | Вывод |
 |---|---:|---:|---:|---|
-| 8x8 | 8x8 | 95.6% | 100.0% | лучший результат, среда простая |
-| 8x8 | 16x16 | 52.0% | 44.0% | перенос есть, но GRPO ухудшает |
-| 16x16 | 16x16 | 83.2% | 88.8% | сложная среда, GRPO помогает |
-| 16x16 | 8x8 | 93.2% | 97.2% | перенос сильный, GRPO помогает |
+| 8x8 | 8x8 | 95.2% | 100.0% | лучший результат, среда простая |
+| 8x8 | 16x16 | 50.8% | 44.0% | перенос есть, но GRPO ухудшает |
+| 16x16 | 16x16 | 83.6% | 84.8% | сложная среда, GRPO даёт небольшой прирост |
+| 16x16 | 8x8 | 88.4% | 95.2% | перенос сильный, GRPO помогает |
 
 Вывод: перенос асимметричен. Обучение на 16x16 даёт политику, которая хорошо переносится на более короткую 8x8 среду, а GRPO дополнительно улучшает этот перенос. Обратное направление слабее: модели, обученные на 8x8, хуже работают на 16x16, а GRPO-донастройка под короткий горизонт дополнительно ухудшает перенос.
 
@@ -279,16 +293,16 @@ python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 -
 python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 --sft-adapter-path checkpoints/sft_adapter_8x8/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_8x8/episode-100 --episodes 250 --goal-color red --prompt-goal-color green
 ```
 
-| Visual goal color | Prompt color | Policy | Success Rate | Avg Reward | Avg Steps (Win) | Timeouts | Action distribution |
-|---|---|---|---:|---:|---:|---:|---|
-| green | green | SFT | 95.6% | 0.936 | 5.8 | 11/250 | L:18.2% / R:12.1% / F:69.7% |
-| green | green | GRPO | 100.0% | 0.981 | 5.5 | 0/250 | L:17.5% / R:13.1% / F:69.4% |
-| red | red | SFT | 42.4% | 0.413 | 7.4 | 144/250 | L:37.1% / R:22.9% / F:40.0% |
-| red | red | GRPO | 3.2% | 0.031 | 6.2 | 242/250 | L:49.9% / R:37.5% / F:12.6% |
-| red | green | SFT | 44.8% | 0.436 | 7.5 | 138/250 | L:33.7% / R:24.2% / F:42.1% |
-| red | green | GRPO | 6.8% | 0.066 | 7.5 | 233/250 | L:46.5% / R:39.9% / F:13.5% |
+| Visual goal color | Prompt color | Policy | Success Rate | Avg Reward | Avg Steps (Win) | Timeouts | Invalid actions | Action distribution |
+|---|---|---|---:|---:|---:|---:|---:|---|
+| green | green | SFT | 95.2% | 0.933 | 5.7 | 10/250 | 2/250 | L:17.1% / R:12.6% / F:70.3% |
+| green | green | GRPO | 100.0% | 0.981 | 5.5 | 0/250 | 0/250 | L:17.5% / R:13.1% / F:69.4% |
+| red | red | SFT | 40.4% | 0.393 | 7.4 | 140/250 | 9/250 | L:35.8% / R:24.7% / F:39.5% |
+| red | red | GRPO | 4.0% | 0.039 | 6.5 | 225/250 | 15/250 | L:50.5% / R:37.3% / F:12.2% |
+| red | green | SFT | 44.0% | 0.428 | 7.5 | 135/250 | 5/250 | L:33.7% / R:24.3% / F:42.0% |
+| red | green | GRPO | 5.6% | 0.055 | 5.7 | 216/250 | 20/250 | L:47.7% / R:39.2% / F:13.0% |
 
-Вывод: SFT частично переносит навигацию на красную цель, но качество всё равно падает с `95.6%` до `42.4-44.8%`. По сравнению со старой оценкой SFT стала устойчивее к изменению цвета: `red/red` вырос с `30.4%` до `42.4%`, `red/green` - с `36.0%` до `44.8%`. GRPO, наоборот, резко теряет устойчивость: несмотря на `100.0%` в исходной green/green среде, на красной цели результат падает до `3.2-6.8%`. Модель в значительной степени выучила визуальный паттерн зелёной клетки, а не абстрактное понятие цели.
+Вывод: SFT частично переносит навигацию на красную цель, но качество всё равно падает с `95.2%` до `40.4–44.0%`. GRPO, наоборот, резко теряет устойчивость: несмотря на `100.0%` в green/green, на красной цели результат падает до `4.0–5.6%`, а доля поворотов растёт. Модель в значительной степени выучила визуальный паттерн зелёной клетки, а не абстрактное понятие цели.
 
 ## Запуск проекта
 
@@ -314,7 +328,7 @@ python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 -
 Для 16x16:
 
 ```powershell
-python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_16x16/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_16x16/episode-100 --episodes 250 --max-steps 40 --val-split 0.01
+python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_16x16/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_16x16/episode-75 --episodes 250 --max-steps 40 --val-split 0.01
 ```
 
 Если `wandb` недоступен или не нужен, используйте флаг:
@@ -363,8 +377,8 @@ vlm-minigrid-rl/
 - обучить SFT baseline для прямого выбора действий;
 - реализовать GRPO fine-tuning;
 - добавить Base NanoVLM, majority-forward и expert BFS baselines;
-- получить `95.6%` success rate для SFT и `100.0%` для GRPO на 8x8;
-- показать, что 16x16 существенно сложнее: SFT достигает `83.2%`, GRPO - `88.8%`;
+- получить `95.2%` success rate для SFT и `100.0%` для GRPO на 8x8;
+- показать, что 16x16 существенно сложнее: SFT достигает `83.6%`, GRPO — `84.8%`;
 - показать асимметричный перенос между 8x8 и 16x16;
 - показать слабую устойчивость к изменению цвета цели.
 

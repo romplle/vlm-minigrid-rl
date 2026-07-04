@@ -9,7 +9,7 @@ from tqdm import tqdm
 from transformers import AutoImageProcessor, AutoTokenizer, GenerationConfig
 
 from .paths import ensure_project_paths
-from .training_utils import ACTION_NAMES, parse_action
+from .training_utils import ACTION_NAMES, parse_action_token_id
 
 
 ensure_project_paths()
@@ -241,8 +241,15 @@ def generate_action(model, tokenizer, image_processor, image, prompt, device, ma
     input_ids, pixel_values, _ = build_inference_inputs(tokenizer, image_processor, image, prompt, device)
     with torch.no_grad():
         output_ids = model.generate(input_ids, pixel_values, max_new_tokens=max_new_tokens)
-    generated_text = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip().lower()
-    action_name, action_idx = parse_action(generated_text)
+
+    prefix_len = input_ids.shape[1]
+    new_token_ids = output_ids[0, prefix_len:]
+    if new_token_ids.numel() == 0:
+        new_token_ids = output_ids[0, -max_new_tokens:]
+
+    token_id = int(new_token_ids[0].item())
+    action_name, action_idx = parse_action_token_id(token_id, action_token_name_by_id(tokenizer))
+    generated_text = tokenizer.decode(new_token_ids, skip_special_tokens=True).strip().lower()
     return action_name, action_idx, generated_text
 
 
@@ -300,6 +307,13 @@ def single_token_action_ids(action_ids_list):
     if all(len(ids) == 1 for ids in action_ids_list):
         return [ids[0] for ids in action_ids_list]
     return None
+
+
+def action_token_name_by_id(tokenizer):
+    action_single_ids = single_token_action_ids(action_token_ids(tokenizer))
+    if action_single_ids is None:
+        raise ValueError("Expected single-token leading-space action labels.")
+    return dict(zip(action_single_ids, ACTION_NAMES))
 
 
 def seq_logprob_given_prefix(model, tokenizer, input_ids_prefix, pixel_values, action_token_ids_):

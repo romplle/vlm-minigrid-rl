@@ -143,12 +143,8 @@ def majority_action_baseline(train_dataset, eval_dataset):
     }
 
 
-def parse_action(generated_text: str):
-    text = generated_text.strip().lower()
-    if "left" in text:
-        return "left", ACTION_TO_ID["left"]
-    if "right" in text:
-        return "right", ACTION_TO_ID["right"]
-    if "forward" in text:
-        return "forward", ACTION_TO_ID["forward"]
-    return None, ACTION_TO_ID["forward"]
+def parse_action_token_id(token_id: int, action_token_name_by_id: dict[int, str]):
+    action_name = action_token_name_by_id.get(int(token_id))
+    if action_name is None:
+        return None, None
+    return action_name, ACTION_TO_ID[action_name]
