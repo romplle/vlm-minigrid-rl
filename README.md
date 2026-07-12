@@ -394,7 +394,8 @@ vlm-minigrid-rl/
 ├── docs/
 │   ├── figures/                  # графики обучения и примеры изображений среды
 ├── nanoVLM/                      # репозиторий NanoVLM
-├── notebooks/                    # exploratory notebooks
+├── notebooks/
+│   └── quick_test.ipynb          # offline check SFT/GRPO vs expert
 ├── scripts/
 │   ├── _bootstrap.py             # настройка import paths для scripts/
 │   ├── dataset_generation.py     # генерация экспертных траекторий
