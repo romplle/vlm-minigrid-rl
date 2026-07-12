@@ -13,11 +13,13 @@ bootstrap()
 from vlm_minigrid_rl.experiment_config import (
     DEFAULT_EVAL_EPISODES,
     DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE,
+    DEFAULT_GRPO_GENERATE_EVAL_EPISODE_BY_ENV_SIZE,
     DEFAULT_SEED,
     DEFAULT_SFT_EPOCHS,
     dataset_dir,
     default_val_split,
     grpo_adapter_root,
+    grpo_generate_adapter_root,
     resolve_grpo_adapter_path,
     resolve_sft_adapter_path,
     sft_adapter_root,
@@ -117,6 +119,14 @@ SUITE_DEFINITIONS = {
 }
 
 
+COMPARE_ARMS = ("sft", "legacy_grpo", "new_grpo")
+COMPARE_NATIVE_SUITES = {
+    "8x8": ["native_8x8"],
+    "16x16": ["native_16x16"],
+    "all": ["native_8x8", "native_16x16"],
+}
+
+
 @dataclass
 class TestRun:
     suite: str
@@ -131,6 +141,9 @@ class TestRun:
     grpo_adapter_path: str
     command: list[str]
     output_json: str
+    arm: str | None = None
+    skip_sft: bool = False
+    skip_grpo: bool = False
     status: str = "pending"
     return_code: int | None = None
     metrics: dict | None = None
@@ -152,6 +165,13 @@ class RunConfig:
     continue_on_error: bool
     output_json: Path | None
     run_dir: Path | None
+    compare_grpo_protocol: bool = False
+    legacy_grpo_episodes_by_env: dict[int, int] | None = None
+    skip_base: bool | None = None
+    skip_majority: bool | None = None
+    skip_expert: bool | None = None
+    skip_sft: bool = False
+    skip_grpo: bool = False
 
 
 def parse_int_list(value: str) -> list[int]:
@@ -213,7 +233,7 @@ def build_test_models_command(
     *,
     eval_env: int,
     sft_adapter_path: Path,
-    grpo_adapter_path: Path,
+    grpo_adapter_path: Path | None,
     episodes: int,
     seed: int,
     goal_color: str,
@@ -221,6 +241,8 @@ def build_test_models_command(
     skip_base: bool,
     skip_majority: bool,
     skip_expert: bool,
+    skip_sft: bool,
+    skip_grpo: bool,
     output_json: Path,
 ) -> list[str]:
     cmd = [
@@ -232,8 +254,6 @@ def build_test_models_command(
         str(dataset_dir(eval_env)),
         "--sft-adapter-path",
         str(sft_adapter_path),
-        "--grpo-adapter-path",
-        str(grpo_adapter_path),
         "--episodes",
         str(episodes),
         "--val-split",
@@ -247,22 +267,41 @@ def build_test_models_command(
         "--output-json",
         str(output_json),
     ]
+    if grpo_adapter_path is not None:
+        cmd.extend(["--grpo-adapter-path", str(grpo_adapter_path)])
     if skip_base:
         cmd.append("--skip-base")
     if skip_majority:
         cmd.append("--skip-majority")
     if skip_expert:
         cmd.append("--skip-expert")
+    if skip_sft:
+        cmd.append("--skip-sft")
+    if skip_grpo:
+        cmd.append("--skip-grpo")
     return cmd
 
 
+def suite_skip_flags(config: RunConfig, suite_def: dict) -> tuple[bool, bool, bool]:
+    skip_base = suite_def["skip_base"] if config.skip_base is None else config.skip_base
+    skip_majority = (
+        suite_def["skip_majority"] if config.skip_majority is None else config.skip_majority
+    )
+    skip_expert = suite_def["skip_expert"] if config.skip_expert is None else config.skip_expert
+    return skip_base, skip_majority, skip_expert
+
+
 def plan_runs(config: RunConfig) -> tuple[list[TestRun], list[str]]:
+    if config.compare_grpo_protocol:
+        return plan_compare_runs(config)
+
     runs: list[TestRun] = []
     warnings: list[str] = []
     run_index = 0
 
     for suite_name in config.suites:
         suite_def = SUITE_DEFINITIONS[suite_name]
+        skip_base, skip_majority, skip_expert = suite_skip_flags(config, suite_def)
 
         for train_env in suite_train_envs(suite_name, suite_def, config.pipeline):
             focal = is_focal_suite(suite_name, suite_def, config.pipeline, train_env)
@@ -285,7 +324,7 @@ def plan_runs(config: RunConfig) -> tuple[list[TestRun], list[str]]:
                         f"missing SFT epoch-{sft_epoch} under {sft_root}"
                     )
                     continue
-                if grpo_path is None:
+                if grpo_path is None and not config.skip_grpo:
                     warnings.append(
                         f"Skip {suite_name} (train {train_env}x{train_env}): "
                         f"missing GRPO episode-{grpo_episode} under {grpo_root}"
@@ -313,9 +352,11 @@ def plan_runs(config: RunConfig) -> tuple[list[TestRun], list[str]]:
                         seed=seed,
                         goal_color=suite_def["goal_color"],
                         prompt_goal_color=suite_def["prompt_goal_color"],
-                        skip_base=suite_def["skip_base"],
-                        skip_majority=suite_def["skip_majority"],
-                        skip_expert=suite_def["skip_expert"],
+                        skip_base=skip_base,
+                        skip_majority=skip_majority,
+                        skip_expert=skip_expert,
+                        skip_sft=config.skip_sft,
+                        skip_grpo=config.skip_grpo,
                         output_json=output_json,
                     )
                     runs.append(
@@ -329,11 +370,114 @@ def plan_runs(config: RunConfig) -> tuple[list[TestRun], list[str]]:
                             goal_color=suite_def["goal_color"],
                             prompt_goal_color=suite_def["prompt_goal_color"],
                             sft_adapter_path=str(sft_path),
-                            grpo_adapter_path=str(grpo_path),
+                            grpo_adapter_path=str(grpo_path) if grpo_path is not None else "",
                             command=command,
                             output_json=str(output_json),
+                            skip_sft=config.skip_sft,
+                            skip_grpo=config.skip_grpo,
                         )
                     )
+
+    return runs, warnings
+
+
+def plan_compare_runs(config: RunConfig) -> tuple[list[TestRun], list[str]]:
+    """Plan SFT vs legacy GRPO vs generate GRPO on native suites only."""
+    runs: list[TestRun] = []
+    warnings: list[str] = []
+    run_index = 0
+    legacy_episodes = config.legacy_grpo_episodes_by_env or {}
+
+    for suite_name in config.suites:
+        if suite_name not in ("native_8x8", "native_16x16"):
+            warnings.append(f"Compare mode ignores non-native suite: {suite_name}")
+            continue
+
+        suite_def = SUITE_DEFINITIONS[suite_name]
+        train_env = suite_def["train_env"]
+        assert train_env is not None
+
+        sft_root = config.adapter_roots[("sft", train_env)]
+        legacy_root = config.adapter_roots[("legacy_grpo", train_env)]
+        new_root = config.adapter_roots[("grpo", train_env)]
+        sft_epoch = config.baseline_sft_epoch[train_env]
+        legacy_episode = legacy_episodes[train_env]
+        new_episode = config.grpo_episodes_by_env[train_env][0]
+
+        sft_path = resolve_sft_adapter_path(train_env, sft_epoch, root=sft_root)
+        legacy_path = resolve_grpo_adapter_path(train_env, legacy_episode, root=legacy_root)
+        new_path = resolve_grpo_adapter_path(train_env, new_episode, root=new_root)
+
+        if sft_path is None:
+            warnings.append(
+                f"Skip compare {suite_name}: missing SFT epoch-{sft_epoch} under {sft_root}"
+            )
+            continue
+        if legacy_path is None:
+            warnings.append(
+                f"Skip compare {suite_name}: missing legacy GRPO episode-{legacy_episode} "
+                f"under {legacy_root}"
+            )
+            continue
+        if new_path is None:
+            warnings.append(
+                f"Skip compare {suite_name}: missing new GRPO episode-{new_episode} under {new_root}"
+            )
+            continue
+
+        # (arm, sft, grpo, sft_ep, grpo_ep, skip_sft, skip_grpo)
+        arm_specs = (
+            ("sft", sft_path, None, sft_epoch, legacy_episode, False, True),
+            ("legacy_grpo", sft_path, legacy_path, sft_epoch, legacy_episode, True, False),
+            ("new_grpo", sft_path, new_path, sft_epoch, new_episode, True, False),
+        )
+
+        for seed in config.seeds:
+            for arm, arm_sft, arm_grpo, arm_sft_ep, arm_grpo_ep, skip_sft, skip_grpo in arm_specs:
+                run_index += 1
+                if config.run_dir is not None:
+                    output_json = config.run_dir / (
+                        f"{run_index:03d}_compare_{suite_name}_{arm}_seed{seed}.json"
+                    )
+                else:
+                    output_json = project_path(
+                        f"runs/_tmp_compare_{run_index}_{suite_name}_{arm}_seed{seed}.json"
+                    )
+
+                command = build_test_models_command(
+                    eval_env=suite_def["eval_env"],
+                    sft_adapter_path=arm_sft,
+                    grpo_adapter_path=arm_grpo,
+                    episodes=config.episodes,
+                    seed=seed,
+                    goal_color=suite_def["goal_color"],
+                    prompt_goal_color=suite_def["prompt_goal_color"],
+                    skip_base=True,
+                    skip_majority=True,
+                    skip_expert=True,
+                    skip_sft=skip_sft,
+                    skip_grpo=skip_grpo,
+                    output_json=output_json,
+                )
+                runs.append(
+                    TestRun(
+                        suite=suite_name,
+                        eval_env=suite_def["eval_env"],
+                        train_env=train_env,
+                        sft_epoch=arm_sft_ep,
+                        grpo_episode=arm_grpo_ep,
+                        seed=seed,
+                        goal_color=suite_def["goal_color"],
+                        prompt_goal_color=suite_def["prompt_goal_color"],
+                        sft_adapter_path=str(arm_sft),
+                        grpo_adapter_path=str(arm_grpo) if arm_grpo is not None else "",
+                        command=command,
+                        output_json=str(output_json),
+                        arm=arm,
+                        skip_sft=skip_sft,
+                        skip_grpo=skip_grpo,
+                    )
+                )
 
     return runs, warnings
 
@@ -341,10 +485,12 @@ def plan_runs(config: RunConfig) -> tuple[list[TestRun], list[str]]:
 def execute_runs(config: RunConfig, runs: list[TestRun]) -> list[TestRun]:
     total = len(runs)
     for index, run in enumerate(runs, start=1):
+        arm_label = f" | arm={run.arm}" if run.arm else ""
         print(
             f"\n[{index}/{total}] {run.suite} | train {run.train_env}x{run.train_env} "
             f"-> eval {run.eval_env}x{run.eval_env} | "
-            f"SFT epoch-{run.sft_epoch} GRPO episode-{run.grpo_episode} | seed={run.seed}"
+            f"SFT epoch-{run.sft_epoch} GRPO episode-{run.grpo_episode} | "
+            f"seed={run.seed}{arm_label}"
         )
         print(" ".join(run.command))
 
@@ -369,6 +515,63 @@ def execute_runs(config: RunConfig, runs: list[TestRun]) -> list[TestRun]:
     return runs
 
 
+def extract_policy_success(run: TestRun, preferred_names: tuple[str, ...]) -> float | None:
+    if not run.metrics:
+        return None
+    by_name = {policy["name"]: policy["metrics"]["success_rate"] for policy in run.metrics["policies"]}
+    for name in preferred_names:
+        if name in by_name:
+            return float(by_name[name])
+    if by_name:
+        return float(next(iter(by_name.values())))
+    return None
+
+
+def summarize_compare_runs(runs: list[TestRun]) -> None:
+    ok_runs = [run for run in runs if run.status == "ok" and run.arm and run.metrics]
+    if not ok_runs:
+        return
+
+    print("\n===============================")
+    print("COMPARE GRPO PROTOCOL (success %)")
+    print("===============================")
+
+    suites = sorted({run.suite for run in ok_runs})
+    for suite in suites:
+        suite_runs = [run for run in ok_runs if run.suite == suite]
+        seeds = sorted({run.seed for run in suite_runs})
+        values: dict[str, dict[int, float]] = {arm: {} for arm in COMPARE_ARMS}
+        for run in suite_runs:
+            preferred = ("SFT",) if run.arm == "sft" else ("GRPO",)
+            success = extract_policy_success(run, preferred)
+            if success is not None and run.arm is not None:
+                values[run.arm][run.seed] = success
+
+        print(f"\n=== {suite} ===")
+        print(f"{'seed':>6}  {'SFT':>7}  {'legacy':>7}  {'new':>7}  {'new-legacy':>10}")
+        for seed in seeds:
+            sft = values["sft"].get(seed)
+            legacy = values["legacy_grpo"].get(seed)
+            new = values["new_grpo"].get(seed)
+            if sft is None or legacy is None or new is None:
+                print(f"{seed:>6}  incomplete")
+                continue
+            print(
+                f"{seed:>6}  {sft:>7.1f}  {legacy:>7.1f}  {new:>7.1f}  {new - legacy:>+10.1f}"
+            )
+
+        for arm in COMPARE_ARMS:
+            arm_vals = [values[arm][seed] for seed in seeds if seed in values[arm]]
+            if not arm_vals:
+                continue
+            mean = sum(arm_vals) / len(arm_vals)
+            print(
+                f"{arm} mean: {mean:.1f}%  range "
+                f"[{min(arm_vals):.1f}, {max(arm_vals):.1f}]"
+            )
+    print("===============================")
+
+
 def summarize_runs(runs: list[TestRun]) -> None:
     ok_runs = [run for run in runs if run.status == "ok" and run.metrics]
     if not ok_runs:
@@ -379,20 +582,22 @@ def summarize_runs(runs: list[TestRun]) -> None:
     print("СВОДКА RUN_TESTS")
     print("===============================")
     print(
-        "| Suite | Train | Eval | SFT | GRPO | Seed | Policy | Success | Reward | Timeouts | Invalid |"
+        "| Suite | Arm | Train | Eval | SFT | GRPO | Seed | Policy | Success | Reward | Timeouts | Invalid |"
     )
-    print("|---|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|")
+    print("|---|---|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|")
     for run in ok_runs:
+        arm = run.arm or "-"
         for policy in run.metrics["policies"]:
             metrics = policy["metrics"]
             print(
-                f"| {run.suite} | {run.train_env}x{run.train_env} | {run.eval_env}x{run.eval_env} | "
+                f"| {run.suite} | {arm} | {run.train_env}x{run.train_env} | {run.eval_env}x{run.eval_env} | "
                 f"{run.sft_epoch} | {run.grpo_episode} | {run.seed} | {policy['name']} | "
                 f"{metrics['success_rate']:.1f}% | {metrics['avg_reward']:.3f} | "
                 f"{metrics['timeouts']}/{metrics['episodes']} | "
                 f"{metrics['invalid_action_episodes']}/{metrics['episodes']} |"
             )
     print("===============================")
+    summarize_compare_runs(runs)
 
 
 def write_report(config: RunConfig, runs: list[TestRun], warnings: list[str]) -> None:
@@ -498,6 +703,49 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sft-root-16x16", default=None)
     parser.add_argument("--grpo-root-16x16", default=None)
     parser.add_argument(
+        "--compare-grpo-protocol",
+        action="store_true",
+        help=(
+            "Compare SFT vs legacy GRPO vs generate GRPO on native suites only "
+            "(skips base/majority/expert; one policy arm per run)."
+        ),
+    )
+    parser.add_argument(
+        "--legacy-grpo-root-8x8",
+        default=None,
+        help="Historical GRPO root for compare mode (default: checkpoints/grpo_adapter_8x8).",
+    )
+    parser.add_argument(
+        "--legacy-grpo-root-16x16",
+        default=None,
+        help="Historical GRPO root for compare mode (default: checkpoints/grpo_adapter_16x16).",
+    )
+    parser.add_argument(
+        "--legacy-grpo-episodes-8x8",
+        type=int,
+        default=DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE[8],
+        help="Legacy GRPO episode for compare mode on 8x8.",
+    )
+    parser.add_argument(
+        "--legacy-grpo-episodes-16x16",
+        type=int,
+        default=DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE[16],
+        help="Legacy GRPO episode for compare mode on 16x16.",
+    )
+    parser.add_argument("--skip-base", action="store_true", help="Force --skip-base for all suites.")
+    parser.add_argument(
+        "--skip-majority",
+        action="store_true",
+        help="Force --skip-majority for all suites.",
+    )
+    parser.add_argument(
+        "--skip-expert",
+        action="store_true",
+        help="Force --skip-expert for all suites.",
+    )
+    parser.add_argument("--skip-sft", action="store_true", help="Force --skip-sft for all suites.")
+    parser.add_argument("--skip-grpo", action="store_true", help="Force --skip-grpo for all suites.")
+    parser.add_argument(
         "--output-json",
         default=None,
         help="Aggregate report path (default: runs/test_report_<timestamp>.json).",
@@ -521,22 +769,33 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
     if args.list_suites:
         return None
 
-    suites = (
-        [item.strip() for item in args.suites.split(",") if item.strip()]
-        if args.suites
-        else PIPELINE_SUITES[args.pipeline]
-    )
+    compare = bool(args.compare_grpo_protocol)
+    if args.suites:
+        suites = [item.strip() for item in args.suites.split(",") if item.strip()]
+    elif compare:
+        suites = list(COMPARE_NATIVE_SUITES[args.pipeline])
+    else:
+        suites = list(PIPELINE_SUITES[args.pipeline])
+
     unknown = [suite for suite in suites if suite not in SUITE_DEFINITIONS]
     if unknown:
         raise ValueError(f"Unknown suites: {unknown}. Use --list-suites to see valid names.")
 
-    default_grpo = (
-        str(DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE[8])
-        if args.pipeline == "8x8"
-        else str(DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE[16])
-        if args.pipeline == "16x16"
-        else f"{DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE[8]},{DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE[16]}"
-    )
+    if compare:
+        default_grpo = (
+            f"{DEFAULT_GRPO_GENERATE_EVAL_EPISODE_BY_ENV_SIZE[8]},"
+            f"{DEFAULT_GRPO_GENERATE_EVAL_EPISODE_BY_ENV_SIZE[16]}"
+            if args.pipeline == "all"
+            else str(DEFAULT_GRPO_GENERATE_EVAL_EPISODE_BY_ENV_SIZE[8 if args.pipeline == "8x8" else 16])
+        )
+    else:
+        default_grpo = (
+            str(DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE[8])
+            if args.pipeline == "8x8"
+            else str(DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE[16])
+            if args.pipeline == "16x16"
+            else f"{DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE[8]},{DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE[16]}"
+        )
     grpo_default = args.grpo_episodes or default_grpo
 
     sft_epochs_default = parse_int_list(args.sft_epochs)
@@ -545,12 +804,20 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
         8: parse_int_list(args.sft_epochs_8x8) if args.sft_epochs_8x8 else sft_epochs_default,
         16: parse_int_list(args.sft_epochs_16x16) if args.sft_epochs_16x16 else sft_epochs_default,
     }
-    grpo_episodes_by_env = {
-        8: parse_int_list(args.grpo_episodes_8x8) if args.grpo_episodes_8x8 else grpo_episodes_default,
-        16: parse_int_list(args.grpo_episodes_16x16)
-        if args.grpo_episodes_16x16
-        else grpo_episodes_default,
-    }
+    if compare and args.grpo_episodes is None and args.grpo_episodes_8x8 is None and args.grpo_episodes_16x16 is None:
+        grpo_episodes_by_env = {
+            8: [DEFAULT_GRPO_GENERATE_EVAL_EPISODE_BY_ENV_SIZE[8]],
+            16: [DEFAULT_GRPO_GENERATE_EVAL_EPISODE_BY_ENV_SIZE[16]],
+        }
+    else:
+        grpo_episodes_by_env = {
+            8: parse_int_list(args.grpo_episodes_8x8)
+            if args.grpo_episodes_8x8
+            else grpo_episodes_default,
+            16: parse_int_list(args.grpo_episodes_16x16)
+            if args.grpo_episodes_16x16
+            else grpo_episodes_default,
+        }
 
     baseline_sft_epoch = {
         8: args.baseline_sft_epoch if args.baseline_sft_epoch is not None else args.baseline_sft_epoch_8x8,
@@ -573,11 +840,24 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
         else project_path(f"runs/test_report_{timestamp}.json")
     )
 
+    if compare:
+        default_new_8 = grpo_generate_adapter_root(8)
+        default_new_16 = grpo_generate_adapter_root(16)
+    else:
+        default_new_8 = grpo_adapter_root(8)
+        default_new_16 = grpo_adapter_root(16)
+
     adapter_roots = {
         ("sft", 8): project_path(args.sft_root_8x8) if args.sft_root_8x8 else sft_adapter_root(8),
-        ("grpo", 8): project_path(args.grpo_root_8x8) if args.grpo_root_8x8 else grpo_adapter_root(8),
+        ("grpo", 8): project_path(args.grpo_root_8x8) if args.grpo_root_8x8 else default_new_8,
         ("sft", 16): project_path(args.sft_root_16x16) if args.sft_root_16x16 else sft_adapter_root(16),
-        ("grpo", 16): project_path(args.grpo_root_16x16) if args.grpo_root_16x16 else grpo_adapter_root(16),
+        ("grpo", 16): project_path(args.grpo_root_16x16) if args.grpo_root_16x16 else default_new_16,
+        ("legacy_grpo", 8): project_path(args.legacy_grpo_root_8x8)
+        if args.legacy_grpo_root_8x8
+        else grpo_adapter_root(8),
+        ("legacy_grpo", 16): project_path(args.legacy_grpo_root_16x16)
+        if args.legacy_grpo_root_16x16
+        else grpo_adapter_root(16),
     }
 
     return RunConfig(
@@ -594,6 +874,16 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
         continue_on_error=args.continue_on_error,
         output_json=output_json,
         run_dir=run_dir,
+        compare_grpo_protocol=compare,
+        legacy_grpo_episodes_by_env={
+            8: args.legacy_grpo_episodes_8x8,
+            16: args.legacy_grpo_episodes_16x16,
+        },
+        skip_base=True if args.skip_base else None,
+        skip_majority=True if args.skip_majority else None,
+        skip_expert=True if args.skip_expert else None,
+        skip_sft=bool(args.skip_sft),
+        skip_grpo=bool(args.skip_grpo),
     )
 
 
@@ -622,6 +912,8 @@ def main() -> int:
     runs, warnings = plan_runs(config)
 
     print(f"Pipeline: {config.pipeline}")
+    if config.compare_grpo_protocol:
+        print("Mode: compare-grpo-protocol (SFT vs legacy vs generate)")
     print(f"Suites: {', '.join(config.suites)}")
     print(f"Planned runs: {len(runs)}")
     for warning in warnings:

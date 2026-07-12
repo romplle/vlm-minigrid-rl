@@ -18,6 +18,7 @@ DEFAULT_SFT_EPOCHS = 3
 DEFAULT_GRPO_TRAIN_EPISODES = 100
 DEFAULT_GRPO_CHECKPOINT_INTERVAL = 25
 DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE = {8: 100, 16: 75}
+DEFAULT_GRPO_GENERATE_EVAL_EPISODE_BY_ENV_SIZE = {8: 100, 16: 50}
 
 
 def env_label(env_size: int) -> str:
@@ -34,6 +35,10 @@ def sft_adapter_root(env_size: int) -> Path:
 
 def grpo_adapter_root(env_size: int) -> Path:
     return project_path(f"checkpoints/grpo_adapter_{env_label(env_size)}")
+
+
+def grpo_generate_adapter_root(env_size: int) -> Path:
+    return project_path(f"checkpoints/grpo_adapter_{env_label(env_size)}_generate")
 
 
 def sft_adapter_epoch_dir(env_size: int, epoch: int | None = None) -> Path:
@@ -54,6 +59,10 @@ def default_val_split(env_size: int) -> float:
 
 def default_grpo_eval_episode(env_size: int) -> int:
     return DEFAULT_GRPO_EVAL_EPISODE_BY_ENV_SIZE[env_size]
+
+
+def default_grpo_generate_eval_episode(env_size: int) -> int:
+    return DEFAULT_GRPO_GENERATE_EVAL_EPISODE_BY_ENV_SIZE[env_size]
 
 
 def adapter_config_exists(adapter_dir: Path) -> bool:

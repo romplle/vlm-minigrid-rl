@@ -31,6 +31,7 @@ from vlm_minigrid_rl.minigrid_utils import create_minigrid_env, default_max_step
 from vlm_minigrid_rl.model_utils import (
     action_token_ids,
     evaluate_action_accuracy,
+    generate_action,
     get_action_distribution,
     load_vlm_model,
     save_model_bundle,
@@ -135,9 +136,40 @@ majority_baseline = majority_action_baseline(train_ds, val_ds)
 print(f"Episode-level split: train={len(train_ds)}, val={len(val_ds)}, val episodes={len(val_episodes)}")
 print(f"Majority baseline on val: {majority_baseline['action']} -> {majority_baseline['accuracy']:.4f}")
 print(f"Rollout goal color: {GOAL_COLOR} | prompt goal color: {PROMPT_GOAL_COLOR}")
-print(f"Config: lr={LR}, epsilon={EPSILON}, beta={BETA}, lora_dropout={LORA_DROPOUT}, seed={SEED}")
+print(
+    f"Config: lr={LR}, epsilon={EPSILON}, beta={BETA}, lora_dropout={LORA_DROPOUT}, "
+    f"seed={SEED}, rollout=generate"
+)
 
 prompt = build_navigation_prompt(PROMPT_GOAL_COLOR)
+
+
+def select_rollout_action(active_model, ego_img):
+    action_name, action_idx, _ = generate_action(
+        active_model,
+        tokenizer,
+        image_processor,
+        ego_img,
+        prompt,
+        DEVICE,
+    )
+    if action_name is None or action_idx is None:
+        return None
+    with torch.no_grad():
+        logits, input_ids, pixel_values = get_action_distribution(
+            active_model,
+            tokenizer,
+            image_processor,
+            ego_img,
+            prompt,
+            DEVICE,
+            action_ids_list,
+            action_single_ids=action_single_ids,
+        )
+        probs = F.softmax(logits, dim=-1)
+        action_log_prob = torch.log(probs[action_idx] + 1e-12)
+    return action_idx, action_log_prob, input_ids, pixel_values
+
 
 def save_checkpoint(save_dir):
     os.makedirs(save_dir, exist_ok=True)
@@ -170,23 +202,13 @@ for episode in range(EPISODES):
 
         for step in range(MAX_STEPS):
             ego_img = obs["image"]
-            
+
             with torch.no_grad():
-                logits, input_ids, pixel_values = get_action_distribution(
-                    active_model,
-                    tokenizer,
-                    image_processor,
-                    ego_img,
-                    prompt,
-                    DEVICE,
-                    action_ids_list,
-                    action_single_ids=action_single_ids,
-                )
-                
-                probs = F.softmax(logits, dim=-1)
-                action_idx = torch.multinomial(probs, 1).item()
-                action_log_prob = torch.log(probs[action_idx] + 1e-12)
-                
+                rollout = select_rollout_action(active_model, ego_img)
+                if rollout is None:
+                    break
+                action_idx, action_log_prob, input_ids, pixel_values = rollout
+
                 if action_single_ids is not None:
                     ref_action_logits = score_action_logits(
                         ref_model,
