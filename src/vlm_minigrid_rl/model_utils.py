@@ -292,6 +292,16 @@ def get_vocab_last_logits(model, input_ids, pixel_values, attention_mask=None):
     return logits[0, -1, :]
 
 
+def get_vocab_last_logits_batched(model, input_ids, pixel_values, attention_mask=None):
+    logits = get_logits(model, input_ids, pixel_values, attention_mask)
+    if attention_mask is None:
+        return logits[:, -1, :]
+
+    lengths = attention_mask.long().sum(dim=1).clamp(min=1) - 1
+    batch_idx = torch.arange(logits.size(0), device=logits.device)
+    return logits[batch_idx, lengths, :]
+
+
 def action_token_texts(action_names=ACTION_NAMES):
     return [f" {action}" for action in action_names]
 
@@ -352,6 +362,42 @@ def score_action_logits(
         if ids else torch.tensor(-1e9, device=vocab_last.device)
         for ids in action_ids_list
     ])
+
+
+def score_action_logits_batched(
+    model,
+    tokenizer,
+    input_ids,
+    pixel_values,
+    action_ids_list,
+    action_single_ids=None,
+    attention_mask=None,
+):
+    """Score 3-way action logits for a batch. Returns [B, num_actions]."""
+    vocab_last = get_vocab_last_logits_batched(
+        model, input_ids, pixel_values, attention_mask=attention_mask
+    )
+    if action_single_ids is not None and max(action_single_ids) < vocab_last.size(-1):
+        action_id_tensor = torch.tensor(action_single_ids, dtype=torch.long, device=vocab_last.device)
+        return vocab_last.index_select(-1, action_id_tensor)
+
+    rows = []
+    for b in range(input_ids.size(0)):
+        row_ids = input_ids[b : b + 1]
+        row_pixels = pixel_values[b : b + 1]
+        row_mask = None if attention_mask is None else attention_mask[b : b + 1]
+        rows.append(
+            score_action_logits(
+                model,
+                tokenizer,
+                row_ids,
+                row_pixels,
+                action_ids_list,
+                action_single_ids=action_single_ids,
+                attention_mask=row_mask,
+            )
+        )
+    return torch.stack(rows, dim=0)
 
 
 def get_action_distribution(

@@ -8,7 +8,7 @@ import wandb
 
 from datasets import load_from_disk
 from peft import LoraConfig, get_peft_model
-from bitsandbytes.optim import AdamW8bit
+from torch.optim import AdamW
 
 from _bootstrap import bootstrap
 bootstrap()
@@ -36,6 +36,7 @@ from vlm_minigrid_rl.model_utils import (
     load_vlm_model,
     save_model_bundle,
     score_action_logits,
+    score_action_logits_batched,
     seq_logprob_given_prefix,
     single_token_action_ids,
 )
@@ -50,6 +51,7 @@ from vlm_minigrid_rl.training_utils import (
 
 
 G = 16
+UPDATE_BATCH_SIZE = 32
 LR = 2e-5
 EPSILON = 0.2
 BETA = 0.05
@@ -71,6 +73,7 @@ def parse_args():
     parser.add_argument("--epsilon", type=float, default=EPSILON)
     parser.add_argument("--beta", type=float, default=BETA)
     parser.add_argument("--lora-dropout", type=float, default=LORA_DROPOUT)
+    parser.add_argument("--update-batch-size",type=int, default=UPDATE_BATCH_SIZE)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--goal-color", default="green", choices=GOAL_COLORS)
     parser.add_argument("--prompt-goal-color", default=None, choices=GOAL_COLORS)
@@ -94,6 +97,7 @@ LR = args.lr
 EPSILON = args.epsilon
 BETA = args.beta
 LORA_DROPOUT = args.lora_dropout
+UPDATE_BATCH_SIZE = args.update_batch_size
 SEED = args.seed
 GOAL_COLOR = args.goal_color
 PROMPT_GOAL_COLOR = args.prompt_goal_color or args.goal_color
@@ -125,7 +129,7 @@ lora_config = LoraConfig(
 active_model = get_peft_model(active_model, lora_config).to(DEVICE)
 active_model.train()
 
-optimizer = AdamW8bit(active_model.parameters(), lr=LR)
+optimizer = AdamW(active_model.parameters(), lr=LR)
 
 action_ids_list = action_token_ids(tokenizer)
 action_single_ids = single_token_action_ids(action_ids_list)
@@ -138,7 +142,7 @@ print(f"Majority baseline on val: {majority_baseline['action']} -> {majority_bas
 print(f"Rollout goal color: {GOAL_COLOR} | prompt goal color: {PROMPT_GOAL_COLOR}")
 print(
     f"Config: lr={LR}, epsilon={EPSILON}, beta={BETA}, lora_dropout={LORA_DROPOUT}, "
-    f"seed={SEED}, rollout=generate"
+    f"seed={SEED}, rollout=generate, update_batch_size={UPDATE_BATCH_SIZE}"
 )
 
 prompt = build_navigation_prompt(PROMPT_GOAL_COLOR)
@@ -257,52 +261,67 @@ for episode in range(EPISODES):
 
     print(f"Ep {episode+1}/{EPISODES} | Mean Return: {mean_return.item():.3f} | Success: {success_rate*100:.1f}%")
 
+    flat_input_ids = []
+    flat_pixel_values = []
+    flat_action_idx = []
+    flat_old_log_prob = []
+    flat_ref_log_prob = []
+    flat_advantages = []
+    flat_scales = []
+
+    for g in range(G):
+        trajectory = group_trajectories[g]
+        traj_len = len(trajectory)
+        if traj_len == 0:
+            continue
+        scale = 1.0 / (traj_len * G)
+        adv = advantages[g]
+        for step_data in trajectory:
+            flat_input_ids.append(step_data["input_ids"])
+            flat_pixel_values.append(step_data["pixel_values"])
+            flat_action_idx.append(int(step_data["action_idx"]))
+            flat_old_log_prob.append(step_data["old_log_prob"].detach())
+            flat_ref_log_prob.append(step_data["ref_log_prob"].detach())
+            flat_advantages.append(adv)
+            flat_scales.append(scale)
+
     optimizer.zero_grad()
     episode_loss = 0.0
-    
-    for g in range(G):
-        adv = advantages[g]
-        trajectory = group_trajectories[g]
-        T = len(trajectory)
-        
-        if T == 0: 
-            continue
-            
-        for step_data in trajectory:
-            input_ids = step_data["input_ids"]
-            pixel_values = step_data["pixel_values"]
-            action_idx = step_data["action_idx"]
-            old_log_prob = step_data["old_log_prob"]
-            ref_log_prob = step_data["ref_log_prob"]
+    num_steps = len(flat_input_ids)
 
-            new_action_logits = score_action_logits(
-                active_model,
-                tokenizer,
-                input_ids,
-                pixel_values,
-                action_ids_list,
-                action_single_ids=action_single_ids,
-            )
+    for start in range(0, num_steps, UPDATE_BATCH_SIZE):
+        end = min(start + UPDATE_BATCH_SIZE, num_steps)
+        input_ids = torch.cat(flat_input_ids[start:end], dim=0)
+        pixel_values = torch.cat(flat_pixel_values[start:end], dim=0)
+        action_idx = torch.tensor(flat_action_idx[start:end], dtype=torch.long, device=DEVICE)
+        old_log_prob = torch.stack(flat_old_log_prob[start:end]).to(DEVICE)
+        ref_log_prob = torch.stack(flat_ref_log_prob[start:end]).to(DEVICE)
+        adv = torch.stack(flat_advantages[start:end]).to(DEVICE)
+        scales = torch.tensor(flat_scales[start:end], dtype=torch.float32, device=DEVICE)
 
-            new_probs = F.softmax(new_action_logits, dim=-1)
-            new_log_prob = torch.log(new_probs[action_idx] + 1e-12)
+        new_action_logits = score_action_logits_batched(
+            active_model,
+            tokenizer,
+            input_ids,
+            pixel_values,
+            action_ids_list,
+            action_single_ids=action_single_ids,
+        )
+        new_probs = F.softmax(new_action_logits, dim=-1)
+        new_log_prob = torch.log(new_probs.gather(1, action_idx.unsqueeze(1)).squeeze(1) + 1e-12)
 
-            ratio = torch.exp(new_log_prob - old_log_prob)
+        ratio = torch.exp(new_log_prob - old_log_prob)
+        surr1 = ratio * adv
+        surr2 = torch.clamp(ratio, 1.0 - EPSILON, 1.0 + EPSILON) * adv
+        kl = torch.exp(ref_log_prob - new_log_prob) - (ref_log_prob - new_log_prob) - 1.0
+        step_loss = -(torch.min(surr1, surr2) - BETA * kl)
+        batch_loss = (step_loss * scales).sum()
 
-            surr1 = ratio * adv
-            surr2 = torch.clamp(ratio, 1.0 - EPSILON, 1.0 + EPSILON) * adv
-            
-            kl = torch.exp(ref_log_prob - new_log_prob) - (ref_log_prob - new_log_prob) - 1.0
+        batch_loss.backward()
+        episode_loss += batch_loss.item()
 
-            step_loss = - (torch.min(surr1, surr2) - BETA * kl)
-            
-            final_step_loss = step_loss / T / G
-            
-            final_step_loss.backward()
-            
-            episode_loss += final_step_loss.item()
-        
-    optimizer.step()
+    if num_steps > 0:
+        optimizer.step()
 
     if USE_WANDB:
         wandb.log({"train/grpo_loss": episode_loss, "episode": episode})

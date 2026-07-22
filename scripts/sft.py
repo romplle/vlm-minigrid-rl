@@ -3,9 +3,9 @@ import os
 
 import torch
 import wandb
-from bitsandbytes.optim import AdamW8bit
 from datasets import load_from_disk
 from peft import LoraConfig, get_peft_model
+from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -34,8 +34,8 @@ from vlm_minigrid_rl.paths import project_path
 from vlm_minigrid_rl.training_utils import majority_action_baseline, set_global_seed, split_dataset_by_episode
 
 
-BATCH_SIZE = 6
-GRAD_ACCUM = 8
+BATCH_SIZE = 32
+GRAD_ACCUM = 1
 LR = 2e-5
 MAX_SEQ_LEN = 256
 USE_WANDB = True
@@ -50,6 +50,12 @@ def parse_args():
     parser.add_argument("--val-split", type=float, default=None)
     parser.add_argument("--val-samples", type=int, default=DEFAULT_VAL_SAMPLES)
     parser.add_argument("--lr", type=float, default=LR)
+    parser.add_argument(
+        "--early-stop-patience",
+        type=int,
+        default=0,
+        help="Stop after this many consecutive val-accuracy decreases (0 disables).",
+    )
     parser.add_argument("--wandb-name", default=None)
     parser.add_argument("--no-wandb", action="store_true")
     return parser.parse_args()
@@ -63,6 +69,7 @@ EPOCHS = args.epochs if args.epochs is not None else DEFAULT_SFT_EPOCHS
 VAL_SPLIT = args.val_split if args.val_split is not None else default_val_split(args.env_size)
 VAL_SAMPLES = args.val_samples
 LR = args.lr
+EARLY_STOP_PATIENCE = args.early_stop_patience
 USE_WANDB = USE_WANDB and not args.no_wandb
 SEED = DEFAULT_SEED
 
@@ -106,7 +113,7 @@ train_loader = DataLoader(
     collate_fn=make_sft_collate_fn(tokenizer, image_processor, max_seq_len=MAX_SEQ_LEN),
 )
 
-optimizer = AdamW8bit(model.parameters(), lr=LR, weight_decay=0.01)
+optimizer = AdamW(model.parameters(), lr=LR, weight_decay=0.01)
 global_step = 0
 model.train()
 
@@ -117,6 +124,9 @@ baseline_acc = evaluate_action_accuracy(
 print(f"Baseline Accuracy: {baseline_acc:.4f}")
 if USE_WANDB:
     wandb.log({"val_accuracy": baseline_acc, "epoch": 0})
+
+val_history = []
+last_saved_epoch = 0
 
 for epoch in range(EPOCHS):
     print(f"\n=== Epoch {epoch + 1}/{EPOCHS} ===")
@@ -168,8 +178,28 @@ for epoch in range(EPOCHS):
     os.makedirs(save_dir, exist_ok=True)
     save_model_bundle(model, tokenizer, image_processor, save_dir)
     print(f"Сохранено в {save_dir}")
+    last_saved_epoch = epoch + 1
+    val_history.append(val_acc)
 
-print(f"SFT-обучение завершено. Последний checkpoint сохранён в {OUTPUT_DIR}/epoch-{EPOCHS}")
+    if EARLY_STOP_PATIENCE >= 2 and len(val_history) >= EARLY_STOP_PATIENCE + 1:
+        recent = val_history[-(EARLY_STOP_PATIENCE + 1) :]
+        if all(recent[i] < recent[i - 1] for i in range(1, len(recent))):
+            print(
+                f"Early stopping: validation accuracy worsened for "
+                f"{EARLY_STOP_PATIENCE} consecutive epochs "
+                f"({', '.join(f'{a:.4f}' for a in recent)}). "
+                f"Stopping after epoch {last_saved_epoch}."
+            )
+            break
+
+if last_saved_epoch == 0:
+    print("SFT-обучение завершено без сохранённых checkpoint-ов.")
+else:
+    print(
+        f"SFT-обучение завершено. Последний checkpoint сохранён в "
+        f"{OUTPUT_DIR}/epoch-{last_saved_epoch} "
+        f"({last_saved_epoch}/{EPOCHS} epochs)."
+    )
 
 if USE_WANDB:
     wandb.finish()

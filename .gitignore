@@ -4,6 +4,8 @@ cache*
 docs
 tests
 runs
+tools
+EXPERIMENTS.md
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
