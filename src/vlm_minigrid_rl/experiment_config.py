@@ -29,6 +29,18 @@ def dataset_dir(env_size: int) -> Path:
     return project_path(f"datasets/dataset_{env_label(env_size)}")
 
 
+def dataset_dir_for_profile(profile) -> Path:
+    return project_path(f"datasets/dataset_{profile.dataset_slug}")
+
+
+def sft_adapter_root_for_profile(profile) -> Path:
+    return project_path(f"checkpoints/sft_adapter_{profile.dataset_slug}")
+
+
+def grpo_adapter_root_for_profile(profile) -> Path:
+    return project_path(f"checkpoints/grpo_adapter_{profile.dataset_slug}")
+
+
 def sft_adapter_root(env_size: int) -> Path:
     return project_path(f"checkpoints/sft_adapter_{env_label(env_size)}")
 

@@ -12,6 +12,7 @@ from tqdm import tqdm
 from _bootstrap import bootstrap
 bootstrap()
 
+from vlm_minigrid_rl.env_profiles import add_profile_cli_args, resolve_profile
 from vlm_minigrid_rl.experiment_config import (
     BASE_MODEL_ID,
     DEFAULT_ENV_SIZE,
@@ -19,10 +20,9 @@ from vlm_minigrid_rl.experiment_config import (
     DEFAULT_SFT_EPOCHS,
     DEFAULT_VAL_SAMPLES,
     WANDB_PROJECT,
-    dataset_dir,
-    default_val_split,
+    dataset_dir_for_profile,
     env_label,
-    sft_adapter_root,
+    sft_adapter_root_for_profile,
 )
 from vlm_minigrid_rl.model_utils import (
     evaluate_action_accuracy,
@@ -44,6 +44,7 @@ USE_WANDB = True
 def parse_args():
     parser = argparse.ArgumentParser(description="Train NanoVLM with SFT on MiniGrid expert data.")
     parser.add_argument("--env-size", type=int, default=DEFAULT_ENV_SIZE, choices=[8, 16])
+    add_profile_cli_args(parser)
     parser.add_argument("--dataset-path", default=None)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--epochs", type=int, default=None)
@@ -62,11 +63,16 @@ def parse_args():
 
 
 args = parse_args()
-experiment_name = env_label(args.env_size)
-DATASET_PATH = str(project_path(args.dataset_path) if args.dataset_path else dataset_dir(args.env_size))
-OUTPUT_DIR = str(project_path(args.output_dir) if args.output_dir else sft_adapter_root(args.env_size))
+PROFILE = resolve_profile(args.env_size, args.env_profile, args.env_id)
+experiment_name = env_label(PROFILE.env_size)
+DATASET_PATH = str(
+    project_path(args.dataset_path) if args.dataset_path else dataset_dir_for_profile(PROFILE)
+)
+OUTPUT_DIR = str(
+    project_path(args.output_dir) if args.output_dir else sft_adapter_root_for_profile(PROFILE)
+)
 EPOCHS = args.epochs if args.epochs is not None else DEFAULT_SFT_EPOCHS
-VAL_SPLIT = args.val_split if args.val_split is not None else default_val_split(args.env_size)
+VAL_SPLIT = args.val_split if args.val_split is not None else PROFILE.val_split
 VAL_SAMPLES = args.val_samples
 LR = args.lr
 EARLY_STOP_PATIENCE = args.early_stop_patience

@@ -2,7 +2,10 @@ wandb
 nanoVLM
 cache*
 docs
-tests
+tests/**
+!tests/
+!tests/**/*.py
+.worktrees/
 runs
 tools
 EXPERIMENTS.md

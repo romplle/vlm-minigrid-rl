@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections import deque
 
 import gymnasium as gym
@@ -5,16 +7,49 @@ from minigrid.core.world_object import Goal
 from minigrid.wrappers import RGBImgPartialObsWrapper
 from tqdm import tqdm
 
+from .env_profiles import EnvProfile, profile_for_env_size
 from .training_utils import ACTION_TO_ID, GOAL_COLORS, ID_TO_ACTION, set_global_seed
 
 
-def default_max_steps(env_size):
-    return 12 if env_size == 8 else 40
+def default_eval_max_steps(env_size, profile: EnvProfile | None = None):
+    if profile is not None:
+        return profile.eval_max_steps
+    return profile_for_env_size(env_size).eval_max_steps
 
 
-def create_minigrid_env(env_size, tile_size=32):
-    env = gym.make(f"MiniGrid-Empty-{env_size}x{env_size}-v0", render_mode="rgb_array")
-    return RGBImgPartialObsWrapper(env, tile_size=tile_size)
+def default_train_max_steps(env_size, profile: EnvProfile | None = None):
+    if profile is not None:
+        return profile.train_max_steps
+    return profile_for_env_size(env_size).train_max_steps
+
+
+def default_max_steps(env_size, profile: EnvProfile | None = None):
+    """Eval horizon. GRPO rollouts must use ``default_train_max_steps``."""
+    return default_eval_max_steps(env_size, profile=profile)
+
+
+def apply_episode_horizon(env, max_steps: int) -> None:
+    """Pin MiniGrid ``unwrapped.max_steps`` (truncation + success reward scale)."""
+    unwrapped = getattr(env, "unwrapped", env)
+    if hasattr(unwrapped, "max_steps"):
+        unwrapped.max_steps = int(max_steps)
+
+
+def create_minigrid_env(
+    env_size,
+    tile_size=32,
+    profile: EnvProfile | None = None,
+    max_steps: int | None = None,
+):
+    if profile is None:
+        profile = profile_for_env_size(env_size)
+    env = gym.make(profile.gym_id, render_mode="rgb_array")
+    wrapped = RGBImgPartialObsWrapper(env, tile_size=tile_size)
+    apply_episode_horizon(
+        wrapped,
+        profile.eval_max_steps if max_steps is None else max_steps,
+    )
+    return wrapped
 
 
 def reset_env_with_goal(env, seed, goal_color="green"):
@@ -31,6 +66,10 @@ def reset_env_with_goal(env, seed, goal_color="green"):
                 unwrapped.grid.set(x, y, None)
     unwrapped.place_obj(Goal(goal_color))
     return env.observation(unwrapped.gen_obs())
+
+
+def reset_env(env, seed, goal_color="green"):
+    return reset_env_with_goal(env, seed, goal_color=goal_color)
 
 
 def turn_balance(actions):
@@ -187,7 +226,7 @@ def evaluate_model_in_env(
     from .model_utils import generate_action
 
     set_global_seed(seed)
-    env = create_minigrid_env(env_size, tile_size=tile_size)
+    env = create_minigrid_env(env_size, tile_size=tile_size, max_steps=max_steps)
     model.eval()
     model.generation_config = GenerationConfig()
     metrics = empty_metrics()
@@ -240,7 +279,7 @@ def evaluate_fixed_action_in_env(
     episodes=50,
     goal_color="green",
 ):
-    env = create_minigrid_env(env_size, tile_size=tile_size)
+    env = create_minigrid_env(env_size, tile_size=tile_size, max_steps=max_steps)
     metrics = empty_metrics()
     print(f"\n[Majority baseline: {action_name}] Запуск симуляции ({episodes} эпизодов)...")
 
@@ -269,7 +308,7 @@ def evaluate_fixed_action_in_env(
 
 
 def evaluate_expert_in_env(env_size, tile_size, max_steps, seed, episodes=50, goal_color="green"):
-    env = create_minigrid_env(env_size, tile_size=tile_size)
+    env = create_minigrid_env(env_size, tile_size=tile_size, max_steps=max_steps)
     metrics = empty_metrics()
     action_balance = 0
     print(f"\n[Expert BFS] Запуск симуляции ({episodes} эпизодов)...")

@@ -9,21 +9,23 @@ from tqdm import tqdm
 from _bootstrap import bootstrap
 bootstrap()
 
+from vlm_minigrid_rl.env_profiles import add_profile_cli_args, resolve_profile
 from vlm_minigrid_rl.experiment_config import (
     DEFAULT_ENV_SIZE,
     DEFAULT_NUM_DATASET_EPISODES,
     DEFAULT_SEED,
     DEFAULT_TILE_SIZE,
-    dataset_dir,
+    dataset_dir_for_profile,
 )
 from vlm_minigrid_rl.minigrid_utils import choose_balanced_shortest_path, create_minigrid_env, reset_env_with_goal, turn_balance
 from vlm_minigrid_rl.paths import project_path
-from vlm_minigrid_rl.training_utils import GOAL_COLORS, ID_TO_ACTION, build_navigation_prompt
+from vlm_minigrid_rl.training_utils import GOAL_COLORS
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate MiniGrid expert trajectories.")
     parser.add_argument("--env-size", type=int, default=DEFAULT_ENV_SIZE, choices=[8, 16])
+    add_profile_cli_args(parser)
     parser.add_argument("--num-episodes", type=int, default=DEFAULT_NUM_DATASET_EPISODES)
     parser.add_argument("--tile-size", type=int, default=DEFAULT_TILE_SIZE)
     parser.add_argument("--seed-base", type=int, default=DEFAULT_SEED)
@@ -35,14 +37,18 @@ def parse_args():
 
 def main():
     args = parse_args()
-    env_size = args.env_size
+    profile = resolve_profile(args.env_size, args.env_profile, args.env_id)
+    env_size = profile.env_size
     prompt_goal_color = args.prompt_goal_color or args.goal_color
-    save_path = project_path(args.save_path) if args.save_path else dataset_dir(env_size)
-    env_id = f"MiniGrid-Empty-{env_size}x{env_size}-v0"
-    prompt = build_navigation_prompt(prompt_goal_color)
-    print(f"Создаём датасет: {env_id}, goal_color={args.goal_color}, prompt_goal_color={prompt_goal_color}")
+    save_path = project_path(args.save_path) if args.save_path else dataset_dir_for_profile(profile)
+    prompt = profile.prompt(prompt_goal_color)
+    id_to_action = profile.id_to_action
+    print(
+        f"Создаём датасет: {profile.gym_id} ({profile.name}), "
+        f"goal_color={args.goal_color}, prompt_goal_color={prompt_goal_color}"
+    )
 
-    wrapper = create_minigrid_env(env_size, tile_size=args.tile_size)
+    wrapper = create_minigrid_env(env_size, tile_size=args.tile_size, profile=profile)
     env = wrapper.unwrapped
 
     data = []
@@ -67,7 +73,7 @@ def main():
                 "ego_image": Image.fromarray(ego_img),
                 "global_image": Image.fromarray(np.asarray(global_img, dtype=np.uint8)),
                 "prompt": prompt,
-                "action": ID_TO_ACTION[action],
+                "action": id_to_action[int(action)],
                 "action_id": int(action),
                 "episode_id": int(episode),
                 "step": int(step_idx),

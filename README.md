@@ -316,6 +316,8 @@ pip install -r requirements.txt
 
 Если `wandb` недоступен или не нужен, добавьте `--no-wandb` к командам обучения.
 
+Горизонты Empty (не смешивать со старыми командами `--max-steps 12` / `40`): GRPO train = `L_max` (8×8: 12, 16×16: 28), env eval = `L_max + max(4, p95 steps-to-see)` (8×8: 16, 16×16: 38). Таблицы выше измерены на старом едином горизонте.
+
 ### Датасеты
 
 ```powershell
@@ -338,9 +340,9 @@ python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 -
 ```powershell
 python scripts/sft.py --env-size 16 --dataset-path datasets/dataset_16x16 --output-dir checkpoints/sft_adapter_16x16_bs32 --epochs 3 --val-split 0.01
 
-python scripts/grpo.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_16x16_bs32/epoch-3 --output-dir checkpoints/grpo_adapter_16x16_from_bs32_sft3 --max-steps 35 --val-split 0.01 --lr 5e-6 --epsilon 0.1 --beta 0.1 --lora-dropout 0.0
+python scripts/grpo.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_16x16_bs32/epoch-3 --output-dir checkpoints/grpo_adapter_16x16_from_bs32_sft3 --val-split 0.01 --lr 5e-6 --epsilon 0.1 --beta 0.1 --lora-dropout 0.0
 
-python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_16x16_bs32/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_16x16_from_bs32_sft3/episode-100 --episodes 250 --max-steps 40 --val-split 0.01
+python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_16x16_bs32/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_16x16_from_bs32_sft3/episode-100 --episodes 250 --val-split 0.01
 ```
 
 ### Transfer
@@ -349,10 +351,10 @@ python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x1
 
 ```powershell
 # 8x8 -> 16x16
-python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_8x8_bs32/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_8x8_from_bs32_sft3/episode-75 --episodes 250 --max-steps 40 --val-split 0.01
+python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_8x8_bs32/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_8x8_from_bs32_sft3/episode-75 --episodes 250 --val-split 0.01
 
 # 16x16 -> 8x8
-python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 --sft-adapter-path checkpoints/sft_adapter_16x16_bs32/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_16x16_from_bs32_sft3/episode-100 --episodes 250 --max-steps 12 --val-split 0.1
+python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 --sft-adapter-path checkpoints/sft_adapter_16x16_bs32/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_16x16_from_bs32_sft3/episode-100 --episodes 250 --val-split 0.1
 ```
 
 ### Goal-color (8x8)

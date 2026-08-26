@@ -7,19 +7,19 @@ from datasets import load_from_disk
 from _bootstrap import bootstrap
 bootstrap()
 
+from vlm_minigrid_rl.env_profiles import add_profile_cli_args, resolve_profile
 from vlm_minigrid_rl.experiment_config import (
     BASE_MODEL_ID,
     DEFAULT_ENV_SIZE,
     DEFAULT_EVAL_EPISODES,
     DEFAULT_SEED,
     DEFAULT_TILE_SIZE,
-    dataset_dir,
-    default_val_split,
+    dataset_dir_for_profile,
     grpo_adapter_episode_dir,
     sft_adapter_epoch_dir,
 )
 from vlm_minigrid_rl.minigrid_utils import (
-    default_max_steps,
+    default_eval_max_steps,
     evaluate_expert_in_env,
     evaluate_fixed_action_in_env,
     evaluate_model_in_env,
@@ -30,7 +30,6 @@ from vlm_minigrid_rl.paths import project_path
 from vlm_minigrid_rl.training_utils import (
     ACTION_TO_ID,
     GOAL_COLORS,
-    build_navigation_prompt,
     majority_action_baseline,
     set_global_seed,
     split_dataset_by_episode,
@@ -40,11 +39,17 @@ from vlm_minigrid_rl.training_utils import (
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate SFT/GRPO MiniGrid policies.")
     parser.add_argument("--env-size", type=int, default=DEFAULT_ENV_SIZE, choices=[8, 16])
+    add_profile_cli_args(parser)
     parser.add_argument("--dataset-path", default=None)
     parser.add_argument("--sft-adapter-path", default=None)
     parser.add_argument("--grpo-adapter-path", default=None)
     parser.add_argument("--episodes", type=int, default=DEFAULT_EVAL_EPISODES)
-    parser.add_argument("--max-steps", type=int, default=None)
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="Env eval horizon. Default: profile eval_max_steps.",
+    )
     parser.add_argument("--val-split", type=float, default=None)
     parser.add_argument("--goal-color", default="green", choices=GOAL_COLORS)
     parser.add_argument("--prompt-goal-color", default=None, choices=GOAL_COLORS)
@@ -59,8 +64,11 @@ def parse_args():
 
 
 args = parse_args()
-ENV_SIZE = args.env_size
-DATASET_PATH = str(project_path(args.dataset_path) if args.dataset_path else dataset_dir(ENV_SIZE))
+PROFILE = resolve_profile(args.env_size, args.env_profile, args.env_id)
+ENV_SIZE = PROFILE.env_size
+DATASET_PATH = str(
+    project_path(args.dataset_path) if args.dataset_path else dataset_dir_for_profile(PROFILE)
+)
 SFT_ADAPTER_PATH = str(
     project_path(args.sft_adapter_path) if args.sft_adapter_path else sft_adapter_epoch_dir(ENV_SIZE)
 )
@@ -68,8 +76,12 @@ GRPO_ADAPTER_PATH = str(
     project_path(args.grpo_adapter_path) if args.grpo_adapter_path else grpo_adapter_episode_dir(ENV_SIZE)
 )
 TEST_EPISODES = args.episodes
-MAX_STEPS = args.max_steps if args.max_steps is not None else default_max_steps(ENV_SIZE)
-VAL_SPLIT = args.val_split if args.val_split is not None else default_val_split(ENV_SIZE)
+MAX_STEPS = (
+    args.max_steps
+    if args.max_steps is not None
+    else default_eval_max_steps(ENV_SIZE, profile=PROFILE)
+)
+VAL_SPLIT = args.val_split if args.val_split is not None else PROFILE.val_split
 GOAL_COLOR = args.goal_color
 PROMPT_GOAL_COLOR = args.prompt_goal_color or args.goal_color
 SEED = args.seed
@@ -82,10 +94,11 @@ if __name__ == "__main__":
     full_ds = load_from_disk(DATASET_PATH)
     train_ds, val_ds, _ = split_dataset_by_episode(full_ds, test_size=VAL_SPLIT, seed=SEED)
     majority = majority_action_baseline(train_ds, val_ds)
-    test_prompt = build_navigation_prompt(PROMPT_GOAL_COLOR)
+    test_prompt = PROFILE.prompt(PROMPT_GOAL_COLOR)
 
     print("=== Dataset baselines ===")
     print(f"Evaluation goal color: {GOAL_COLOR} | prompt goal color: {PROMPT_GOAL_COLOR}")
+    print(f"Eval max_steps={MAX_STEPS} (train_max_steps={PROFILE.train_max_steps})")
     print(f"Episode-level train rows: {len(train_ds)}, val rows: {len(val_ds)}")
     print(
         f"Majority action from train: {majority['action']} | "
@@ -208,11 +221,14 @@ if __name__ == "__main__":
         payload = {
             "config": {
                 "env_size": ENV_SIZE,
+                "env_profile": PROFILE.name,
                 "dataset_path": DATASET_PATH,
                 "sft_adapter_path": SFT_ADAPTER_PATH,
                 "grpo_adapter_path": GRPO_ADAPTER_PATH,
                 "episodes": TEST_EPISODES,
                 "max_steps": MAX_STEPS,
+                "eval_max_steps": MAX_STEPS,
+                "train_max_steps": PROFILE.train_max_steps,
                 "val_split": VAL_SPLIT,
                 "goal_color": GOAL_COLOR,
                 "prompt_goal_color": PROMPT_GOAL_COLOR,
