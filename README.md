@@ -11,6 +11,8 @@
 
 В проекте адаптируется vision-language модель NanoVLM для управления агентом в среде MiniGrid EmptyEnv. Агент получает частичное RGB-наблюдение 7x7 клеток и должен выбрать одно из трёх действий: `left`, `right` или `forward`.
 
+Научный каталог экспериментов (линейки A/B, OOD, декодер, отвергнутые гипотезы): **[RESEARCH.md](RESEARCH.md)**. Таблицы ниже — линейка A (3 эпохи SFT); их нельзя смешивать с длинным SFT / handoff и с новым split-горизонтом.
+
 Обучение проводится в два этапа:
 
 1. **SFT (Supervised Fine-Tuning)** на экспертных траекториях, построенных BFS-планировщиком.
@@ -39,6 +41,7 @@
 5. [Запуск проекта](#запуск-проекта)
 6. [Структура проекта](#структура-проекта)
 7. [Выводы и дальнейшая работа](#выводы-и-дальнейшая-работа)
+8. [Научный обзор](RESEARCH.md)
 
 ## Данные и эксперт
 
@@ -124,6 +127,8 @@ Validation accuracy используется только как вспомог�
 ## Результаты
 
 Environment evaluation: `generate`, 250 episodes, seeds **42 / 123 / 456**. Команды обучения и evaluation — в разделе [Запуск проекта](#запуск-проекта).
+
+Цифры этого раздела — **линейка A** (SFT 3 эпохи, bs32 / AdamW) на **старом unified horizon** (Empty 8×8 eval=12, Empty 16×16 eval=40). Канон главы, длинный SFT, OOD C1 и TTAug — в [RESEARCH.md](RESEARCH.md). 8×8 GRPO **97.73%** ниже — pick `episode-75`; в главе primary = `episode-100` (**97.20%**). Не складывать эти % с линейкой B (`*_bs32_e10`) и с DoorKey.
 
 Headline checkpoint-ы:
 
@@ -275,7 +280,7 @@ seed 42, 250 episodes. Adapters: SFT/GRPO, обученные на 16x16 (`epoch
 | 16x16 | 16x16 | 78.13% | 83.33% | сложная среда, прирост GRPO заметный |
 | 16x16 | 8x8 | 94.0% | 96.0% | перенос сильный, GRPO помогает (seed 42) |
 
-Transfer и goal-color — только seed 42.
+Transfer и goal-color — только seed 42, линейка A. Multi-seed OOD на длинном SFT (C1: GRPO **вредит** transfer 8→16 и goal-red) — [RESEARCH.md](RESEARCH.md) §8.
 
 Вывод: перенос асимметричен. Обучение на 16x16 даёт политику, которая хорошо переносится на более короткую 8x8 среду, а GRPO дополнительно улучшает этот перенос. Обратное направление слабее: модели, обученные на 8x8, хуже работают на 16x16, а GRPO-донастройка под короткий горизонт дополнительно ухудшает перенос.
 
@@ -299,7 +304,7 @@ seed 42, 250 episodes. Adapters: 8x8 SFT/GRPO (`epoch-3` / `episode-75`). Ком
 | red | green | SFT | 44.8% | 0.437 | 6.7 | 134/250 | 4/250 | L:32.0% / R:21.4% / F:46.6% |
 | red | green | GRPO | 9.6% | 0.094 | 7.2 | 221/250 | 5/250 | L:52.7% / R:28.7% / F:18.7% |
 
-Вывод: SFT частично переносит навигацию на красную цель, но качество всё равно падает с `91.6%` до `40.4–44.8%`. GRPO резко теряет устойчивость: несмотря на `98.0%` в green/green, на красной цели результат падает до `8.0–9.6%`, а доля поворотов растёт. Модель в значительной степени опирается на визуальный паттерн зелёной клетки, а не на абстрактное понятие цели.
+Вывод: SFT частично переносит навигацию на красную цель, но качество всё равно падает с `91.6%` до `40.4–44.8%`. GRPO резко теряет устойчивость: несмотря на `98.0%` в green/green, на красной цели результат падает до `8.0–9.6%`, а доля поворотов растёт. Модель в значительной степени опирается на визуальный паттерн зелёной клетки, а не на абстрактное понятие цели. Тот же знак на линейке B, три eval seed: [RESEARCH.md](RESEARCH.md) §8 (`HURTS_REPLICATED`).
 
 ## Запуск проекта
 
@@ -315,8 +320,6 @@ pip install -r requirements.txt
 3. Скачайте [NanoVLM](https://github.com/huggingface/nanoVLM/releases/tag/v0.1) и поместите папку в корень проекта под именем `nanoVLM`.
 
 Если `wandb` недоступен или не нужен, добавьте `--no-wandb` к командам обучения.
-
-Горизонты Empty (не смешивать со старыми командами `--max-steps 12` / `40`): GRPO train = `L_max` (8×8: 12, 16×16: 28), env eval = `L_max + max(4, p95 steps-to-see)` (8×8: 16, 16×16: 38). Таблицы выше измерены на старом едином горизонте.
 
 ### Датасеты
 
@@ -340,9 +343,9 @@ python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 -
 ```powershell
 python scripts/sft.py --env-size 16 --dataset-path datasets/dataset_16x16 --output-dir checkpoints/sft_adapter_16x16_bs32 --epochs 3 --val-split 0.01
 
-python scripts/grpo.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_16x16_bs32/epoch-3 --output-dir checkpoints/grpo_adapter_16x16_from_bs32_sft3 --val-split 0.01 --lr 5e-6 --epsilon 0.1 --beta 0.1 --lora-dropout 0.0
+python scripts/grpo.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_16x16_bs32/epoch-3 --output-dir checkpoints/grpo_adapter_16x16_from_bs32_sft3 --max-steps 35 --val-split 0.01 --lr 5e-6 --epsilon 0.1 --beta 0.1 --lora-dropout 0.0
 
-python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_16x16_bs32/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_16x16_from_bs32_sft3/episode-100 --episodes 250 --val-split 0.01
+python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_16x16_bs32/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_16x16_from_bs32_sft3/episode-100 --episodes 250 --max-steps 40 --val-split 0.01
 ```
 
 ### Transfer
@@ -351,10 +354,10 @@ python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x1
 
 ```powershell
 # 8x8 -> 16x16
-python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_8x8_bs32/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_8x8_from_bs32_sft3/episode-75 --episodes 250 --val-split 0.01
+python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_8x8_bs32/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_8x8_from_bs32_sft3/episode-75 --episodes 250 --max-steps 40 --val-split 0.01
 
 # 16x16 -> 8x8
-python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 --sft-adapter-path checkpoints/sft_adapter_16x16_bs32/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_16x16_from_bs32_sft3/episode-100 --episodes 250 --val-split 0.1
+python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 --sft-adapter-path checkpoints/sft_adapter_16x16_bs32/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_16x16_from_bs32_sft3/episode-100 --episodes 250 --max-steps 12 --val-split 0.1
 ```
 
 ### Goal-color (8x8)
@@ -388,6 +391,7 @@ vlm-minigrid-rl/
 ├── nanoVLM/                      # репозиторий NanoVLM
 ├── notebooks/
 │   └── quick_test.ipynb          # offline check SFT/GRPO vs expert
+├── RESEARCH.md                   # канон экспериментов (линейки, OOD, отвергнутые гипотезы)
 ├── scripts/
 │   ├── _bootstrap.py             # настройка import paths для scripts/
 │   ├── dataset_generation.py     # генерация экспертных траекторий
@@ -408,19 +412,15 @@ vlm-minigrid-rl/
 
 ## Выводы и дальнейшая работа
 
-В текущем состоянии проекта удалось:
+Полный каталог, вердикты и что нельзя смешивать — **[RESEARCH.md](RESEARCH.md)**. Кратко:
 
-- сгенерировать экспертные BFS trajectories;
-- обучить SFT baseline для прямого выбора действий;
-- реализовать GRPO fine-tuning;
-- получить на 8x8 SFT mean **93.47%** и GRPO mean **97.73%** (+4.26 п.п.);
-- получить на 16x16 SFT mean **78.13%** и GRPO mean **83.33%** (+5.20 п.п.);
-- показать асимметричный перенос между 8x8 и 16x16;
-- показать слабую устойчивость к изменению цвета цели.
+- Pipeline работает: BFS-эксперт → SFT LoRA → GRPO LoRA, eval = `generate`.
+- Линейка A (этот README): 8×8 SFT **93.47%**, GRPO **97.73% @ep75** (+4.26 п.п.; в главе ep100 = **97.20%**); 16×16 SFT **78.13%**, GRPO **83.33%** (+5.20 п.п., один GRPO train seed).
+- После длинного SFT in-domain GRPO почти исчезает в сырых пунктах (8×8 e9 Δ **+0.40±0.23** pp; 16×16 e8 Δ **−0.80** pp). GRPO полезен, когда у SFT ещё большой headroom.
+- In-domain выигрыш **не** переносится на OOD: на тех же 8×8 e9 адаптерах GRPO хуже SFT на transfer 8→16 (**−12.40±4.80** pp) и goal-red (**−15.47±1.97** pp), три eval seed (`HURTS_REPLICATED`).
+- Фотометрический TTAug (среднее 3-way softmax по K=8 видамм) C1 **не чинит** (`HURTS_MORE`); 3-way декодер схлопывается в `right`, тогда как `generate` живой.
+- Декодер — ось результата: на 16×16 greedy SFT e5 = **92.40%**, поэтому плато ~83% под `generate` — не потолок среды. Base-anchored LoRA на late SFT — **NEGATIVE**.
 
-Дальнейшие направления исследования:
+Empty in-domain как глава **заморожен**. Следующие шаги — только если они меняют утверждение из RESEARCH.md §12 (механизм C1 / зазор generate vs 3-way), а не ещё один in-domain sweep.
 
-- **Поэтапное обучение и обучение на смешанных средах разного размера** - обучать модель последовательно на средах разного размера или на объединённом датасете для улучшения устойчивости.
-- **Prompt engineering** - сравнение разных промптов.
-- **Формат `text+action` и Chain-of-Thought** - генерация краткого описания видимой среды или плана перед выбором итогового действия.
-- **VLA-подход (Vision-Language-Action)** - добавление отдельной головы выбора действия вместо генерации действия как текстового токена.
+Список 2026-07 (mixed-size curriculum, prompt engineering, CoT, VLA-голова) **снят** с роли плана: это не закрывает C1 и не следует из отвергнутых гипотез.
