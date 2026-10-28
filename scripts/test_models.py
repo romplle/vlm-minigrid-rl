@@ -14,9 +14,11 @@ from vlm_minigrid_rl.experiment_config import (
     DEFAULT_EVAL_EPISODES,
     DEFAULT_SEED,
     DEFAULT_TILE_SIZE,
-    dataset_dir_for_profile,
     grpo_adapter_episode_dir,
     sft_adapter_epoch_dir,
+    dataset_dir_for_profile,
+    grpo_adapter_root_for_profile,
+    sft_adapter_root_for_profile,
 )
 from vlm_minigrid_rl.minigrid_utils import (
     default_eval_max_steps,
@@ -28,7 +30,6 @@ from vlm_minigrid_rl.minigrid_utils import (
 from vlm_minigrid_rl.model_utils import load_base_vlm_model, load_vlm_model, load_vlm_model_with_adapters
 from vlm_minigrid_rl.paths import project_path
 from vlm_minigrid_rl.training_utils import (
-    ACTION_TO_ID,
     GOAL_COLORS,
     majority_action_baseline,
     set_global_seed,
@@ -59,6 +60,12 @@ def parse_args():
     parser.add_argument("--skip-majority", action="store_true")
     parser.add_argument("--skip-expert", action="store_true")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument(
+        "--action-mode",
+        default="generate",
+        choices=["generate", "argmax3"],
+        help="Env action selection: generate (default, headline) or argmax3 (3-way greedy diagnostic).",
+    )
     parser.add_argument("--output-json", default=None, help="Write policy metrics to a JSON file.")
     return parser.parse_args()
 
@@ -70,10 +77,22 @@ DATASET_PATH = str(
     project_path(args.dataset_path) if args.dataset_path else dataset_dir_for_profile(PROFILE)
 )
 SFT_ADAPTER_PATH = str(
-    project_path(args.sft_adapter_path) if args.sft_adapter_path else sft_adapter_epoch_dir(ENV_SIZE)
+    project_path(args.sft_adapter_path)
+    if args.sft_adapter_path
+    else (
+        sft_adapter_epoch_dir(PROFILE.env_size)
+        if PROFILE.kind == "empty"
+        else sft_adapter_root_for_profile(PROFILE) / "epoch-3"
+    )
 )
 GRPO_ADAPTER_PATH = str(
-    project_path(args.grpo_adapter_path) if args.grpo_adapter_path else grpo_adapter_episode_dir(ENV_SIZE)
+    project_path(args.grpo_adapter_path)
+    if args.grpo_adapter_path
+    else (
+        grpo_adapter_episode_dir(PROFILE.env_size)
+        if PROFILE.kind == "empty"
+        else grpo_adapter_root_for_profile(PROFILE) / "episode-100"
+    )
 )
 TEST_EPISODES = args.episodes
 MAX_STEPS = (
@@ -85,6 +104,7 @@ VAL_SPLIT = args.val_split if args.val_split is not None else PROFILE.val_split
 GOAL_COLOR = args.goal_color
 PROMPT_GOAL_COLOR = args.prompt_goal_color or args.goal_color
 SEED = args.seed
+ACTION_MODE = args.action_mode
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 set_global_seed(SEED)
@@ -93,7 +113,7 @@ set_global_seed(SEED)
 if __name__ == "__main__":
     full_ds = load_from_disk(DATASET_PATH)
     train_ds, val_ds, _ = split_dataset_by_episode(full_ds, test_size=VAL_SPLIT, seed=SEED)
-    majority = majority_action_baseline(train_ds, val_ds)
+    majority = majority_action_baseline(train_ds, val_ds, action_names=PROFILE.action_names)
     test_prompt = PROFILE.prompt(PROMPT_GOAL_COLOR)
 
     print("=== Dataset baselines ===")
@@ -127,6 +147,8 @@ if __name__ == "__main__":
             "Base NanoVLM",
             episodes=TEST_EPISODES,
             goal_color=GOAL_COLOR,
+            action_mode=ACTION_MODE,
+            profile=PROFILE,
         )
         results.append(("Base NanoVLM", base_result))
         del base_model
@@ -154,6 +176,8 @@ if __name__ == "__main__":
             "SFT",
             episodes=TEST_EPISODES,
             goal_color=GOAL_COLOR,
+            action_mode=ACTION_MODE,
+            profile=PROFILE,
         )
         results.append(("SFT", sft_result))
         del sft_model
@@ -183,6 +207,8 @@ if __name__ == "__main__":
             "GRPO",
             episodes=TEST_EPISODES,
             goal_color=GOAL_COLOR,
+            action_mode=ACTION_MODE,
+            profile=PROFILE,
         )
         results.append(("GRPO", grpo_result))
         del grpo_model
@@ -193,13 +219,14 @@ if __name__ == "__main__":
     if not args.skip_majority:
         majority_result = evaluate_fixed_action_in_env(
             majority["action"],
-            ACTION_TO_ID[majority["action"]],
+            dict(PROFILE.action_to_id)[majority["action"]],
             ENV_SIZE,
             DEFAULT_TILE_SIZE,
             MAX_STEPS,
             SEED,
             episodes=TEST_EPISODES,
             goal_color=GOAL_COLOR,
+            profile=PROFILE,
         )
         comparison_rows.append(("Majority baseline", majority_result))
     comparison_rows.extend(results)
@@ -211,6 +238,7 @@ if __name__ == "__main__":
             SEED,
             episodes=TEST_EPISODES,
             goal_color=GOAL_COLOR,
+            profile=PROFILE,
         )
         comparison_rows.append(("Expert BFS upper bound", expert_result))
 
@@ -222,6 +250,7 @@ if __name__ == "__main__":
             "config": {
                 "env_size": ENV_SIZE,
                 "env_profile": PROFILE.name,
+                "gym_id": PROFILE.gym_id,
                 "dataset_path": DATASET_PATH,
                 "sft_adapter_path": SFT_ADAPTER_PATH,
                 "grpo_adapter_path": GRPO_ADAPTER_PATH,
@@ -233,6 +262,7 @@ if __name__ == "__main__":
                 "goal_color": GOAL_COLOR,
                 "prompt_goal_color": PROMPT_GOAL_COLOR,
                 "seed": SEED,
+                "action_mode": ACTION_MODE,
             },
             "policies": [
                 {"name": name, "metrics": metrics}

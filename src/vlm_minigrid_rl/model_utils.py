@@ -9,7 +9,7 @@ from tqdm import tqdm
 from transformers import AutoImageProcessor, AutoTokenizer, GenerationConfig
 
 from .paths import ensure_project_paths
-from .training_utils import ACTION_NAMES, parse_action_token_id
+from .training_utils import ACTION_NAMES, ACTION_TO_ID, parse_action_token_id
 
 
 ensure_project_paths()
@@ -237,7 +237,18 @@ def build_inference_inputs(tokenizer, image_processor, image, prompt, device):
     return input_ids, pixel_values, attention_mask
 
 
-def generate_action(model, tokenizer, image_processor, image, prompt, device, max_new_tokens=1):
+def generate_action(
+    model,
+    tokenizer,
+    image_processor,
+    image,
+    prompt,
+    device,
+    max_new_tokens=1,
+    action_names=ACTION_NAMES,
+    action_to_id=None,
+):
+    mapping = ACTION_TO_ID if action_to_id is None else action_to_id
     input_ids, pixel_values, _ = build_inference_inputs(tokenizer, image_processor, image, prompt, device)
     with torch.no_grad():
         output_ids = model.generate(input_ids, pixel_values, max_new_tokens=max_new_tokens)
@@ -248,12 +259,59 @@ def generate_action(model, tokenizer, image_processor, image, prompt, device, ma
         new_token_ids = output_ids[0, -max_new_tokens:]
 
     token_id = int(new_token_ids[0].item())
-    action_name, action_idx = parse_action_token_id(token_id, action_token_name_by_id(tokenizer))
+    action_name, action_idx = parse_action_token_id(
+        token_id,
+        action_token_name_by_id(tokenizer, action_names=action_names),
+        action_to_id=mapping,
+    )
     generated_text = tokenizer.decode(new_token_ids, skip_special_tokens=True).strip().lower()
     return action_name, action_idx, generated_text
 
 
-def evaluate_action_accuracy(model, tokenizer, image_processor, dataset, num_samples=100, seed=42, device="cuda"):
+def select_action_argmax3(
+    model,
+    tokenizer,
+    image_processor,
+    image,
+    prompt,
+    device,
+    action_names=ACTION_NAMES,
+    action_to_id=None,
+):
+    """Diagnostic greedy action: argmax over N-way score_action_logits (not full-vocab)."""
+    mapping = ACTION_TO_ID if action_to_id is None else action_to_id
+    names = list(action_names)
+    action_ids_list = action_token_ids(tokenizer, names)
+    action_single_ids = single_token_action_ids(action_ids_list)
+    input_ids, pixel_values, attention_mask = build_inference_inputs(
+        tokenizer, image_processor, image, prompt, device
+    )
+    with torch.no_grad():
+        action_logits = score_action_logits(
+            model,
+            tokenizer,
+            input_ids,
+            pixel_values,
+            action_ids_list,
+            action_single_ids=action_single_ids,
+            attention_mask=attention_mask,
+        )
+        best = int(torch.argmax(action_logits).item())
+    action_name = names[best]
+    return action_name, mapping[action_name], ""
+
+
+def evaluate_action_accuracy(
+    model,
+    tokenizer,
+    image_processor,
+    dataset,
+    num_samples=100,
+    seed=42,
+    device="cuda",
+    action_names=ACTION_NAMES,
+    action_to_id=None,
+):
     was_training = model.training
     model.eval()
     model.generation_config = GenerationConfig()
@@ -272,6 +330,8 @@ def evaluate_action_accuracy(model, tokenizer, image_processor, dataset, num_sam
             item["ego_image"].convert("RGB"),
             item["prompt"],
             device,
+            action_names=action_names,
+            action_to_id=action_to_id,
         )
         if action_name == item["action"]:
             correct += 1
@@ -319,11 +379,12 @@ def single_token_action_ids(action_ids_list):
     return None
 
 
-def action_token_name_by_id(tokenizer):
-    action_single_ids = single_token_action_ids(action_token_ids(tokenizer))
+def action_token_name_by_id(tokenizer, action_names=ACTION_NAMES):
+    names = list(action_names)
+    action_single_ids = single_token_action_ids(action_token_ids(tokenizer, names))
     if action_single_ids is None:
         raise ValueError("Expected single-token leading-space action labels.")
-    return dict(zip(action_single_ids, ACTION_NAMES))
+    return dict(zip(action_single_ids, names))
 
 
 def seq_logprob_given_prefix(model, tokenizer, input_ids_prefix, pixel_values, action_token_ids_):
@@ -373,7 +434,7 @@ def score_action_logits_batched(
     action_single_ids=None,
     attention_mask=None,
 ):
-    """Score 3-way action logits for a batch. Returns [B, num_actions]."""
+    """Score N-way action logits for a batch. Returns [B, num_actions]."""
     vocab_last = get_vocab_last_logits_batched(
         model, input_ids, pixel_values, attention_mask=attention_mask
     )

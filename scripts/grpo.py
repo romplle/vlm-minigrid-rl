@@ -13,7 +13,7 @@ from torch.optim import AdamW
 from _bootstrap import bootstrap
 bootstrap()
 
-from vlm_minigrid_rl.env_profiles import add_profile_cli_args, resolve_profile
+from vlm_minigrid_rl.env_profiles import add_profile_cli_args, policy_index, resolve_profile
 from vlm_minigrid_rl.experiment_config import (
     BASE_MODEL_ID,
     DEFAULT_ENV_SIZE,
@@ -24,9 +24,13 @@ from vlm_minigrid_rl.experiment_config import (
     WANDB_PROJECT,
     dataset_dir_for_profile,
     grpo_adapter_root_for_profile,
-    sft_adapter_epoch_dir,
+    sft_adapter_root_for_profile,
 )
-from vlm_minigrid_rl.minigrid_utils import create_minigrid_env, default_train_max_steps, reset_env_with_goal
+from vlm_minigrid_rl.minigrid_utils import (
+    create_minigrid_env,
+    default_train_max_steps,
+    reset_env,
+)
 from vlm_minigrid_rl.model_utils import (
     action_token_ids,
     evaluate_action_accuracy,
@@ -89,11 +93,15 @@ def parse_args():
 args = parse_args()
 PROFILE = resolve_profile(args.env_size, args.env_profile, args.env_id)
 ENV_SIZE = PROFILE.env_size
+ACTION_NAMES_P = list(PROFILE.action_names)
+ACTION_TO_ID_P = dict(PROFILE.action_to_id)
 DATASET_PATH = str(
     project_path(args.dataset_path) if args.dataset_path else dataset_dir_for_profile(PROFILE)
 )
 SFT_ADAPTER_PATH = str(
-    project_path(args.sft_adapter_path) if args.sft_adapter_path else sft_adapter_epoch_dir(ENV_SIZE)
+    project_path(args.sft_adapter_path)
+    if args.sft_adapter_path
+    else sft_adapter_root_for_profile(PROFILE) / "epoch-3"
 )
 OUTPUT_DIR = str(
     project_path(args.output_dir) if args.output_dir else grpo_adapter_root_for_profile(PROFILE)
@@ -144,35 +152,38 @@ active_model.train()
 
 optimizer = AdamW(active_model.parameters(), lr=LR)
 
-action_ids_list = action_token_ids(tokenizer)
+action_ids_list = action_token_ids(tokenizer, ACTION_NAMES_P)
 action_single_ids = single_token_action_ids(action_ids_list)
 
 full_ds = load_from_disk(DATASET_PATH)
 train_ds, val_ds, val_episodes = split_dataset_by_episode(full_ds, test_size=VAL_SPLIT, seed=SEED)
-majority_baseline = majority_action_baseline(train_ds, val_ds)
+majority_baseline = majority_action_baseline(train_ds, val_ds, action_names=ACTION_NAMES_P)
 print(f"Episode-level split: train={len(train_ds)}, val={len(val_ds)}, val episodes={len(val_episodes)}")
 print(f"Majority baseline on val: {majority_baseline['action']} -> {majority_baseline['accuracy']:.4f}")
-print(f"Rollout goal color: {GOAL_COLOR} | prompt goal color: {PROMPT_GOAL_COLOR}")
+print(f"Profile: {PROFILE.name} | Rollout goal color: {GOAL_COLOR} | prompt goal color: {PROMPT_GOAL_COLOR}")
 print(
     f"Config: lr={LR}, epsilon={EPSILON}, beta={BETA}, lora_dropout={LORA_DROPOUT}, "
     f"seed={SEED}, rollout=generate, update_batch_size={UPDATE_BATCH_SIZE}, "
-    f"train_max_steps={MAX_STEPS} (eval_max_steps={PROFILE.eval_max_steps})"
+    f"train_max_steps={MAX_STEPS}"
 )
 
 prompt = PROFILE.prompt(PROMPT_GOAL_COLOR)
 
 
 def select_rollout_action(active_model, ego_img):
-    action_name, action_idx, _ = generate_action(
+    action_name, minigrid_id, _ = generate_action(
         active_model,
         tokenizer,
         image_processor,
         ego_img,
         prompt,
         DEVICE,
+        action_names=ACTION_NAMES_P,
+        action_to_id=ACTION_TO_ID_P,
     )
-    if action_name is None or action_idx is None:
+    if action_name is None or minigrid_id is None:
         return None
+    pidx = policy_index(action_name, ACTION_NAMES_P)
     with torch.no_grad():
         logits, input_ids, pixel_values = get_action_distribution(
             active_model,
@@ -185,8 +196,8 @@ def select_rollout_action(active_model, ego_img):
             action_single_ids=action_single_ids,
         )
         probs = F.softmax(logits, dim=-1)
-        action_log_prob = torch.log(probs[action_idx] + 1e-12)
-    return action_idx, action_log_prob, input_ids, pixel_values
+        action_log_prob = torch.log(probs[pidx] + 1e-12)
+    return minigrid_id, pidx, action_name, action_log_prob, input_ids, pixel_values
 
 
 def save_checkpoint(save_dir):
@@ -197,7 +208,9 @@ def save_checkpoint(save_dir):
 
 # GRPO
 global_step = 0
-env = create_minigrid_env(ENV_SIZE, tile_size=DEFAULT_TILE_SIZE, profile=PROFILE, max_steps=MAX_STEPS)
+env = create_minigrid_env(
+    ENV_SIZE, tile_size=DEFAULT_TILE_SIZE, profile=PROFILE, max_steps=MAX_STEPS
+)
 rng = random.Random(SEED)
 
 for episode in range(EPISODES):
@@ -205,18 +218,28 @@ for episode in range(EPISODES):
     
     group_trajectories = []
     group_returns = []
+    group_action_names = []
 
     if episode % 25 == 0:
         val_acc = evaluate_action_accuracy(
-            active_model, tokenizer, image_processor, val_ds, num_samples=100, seed=SEED, device=DEVICE
+            active_model,
+            tokenizer,
+            image_processor,
+            val_ds,
+            num_samples=100,
+            seed=SEED,
+            device=DEVICE,
+            action_names=ACTION_NAMES_P,
+            action_to_id=ACTION_TO_ID_P,
         )
         print(f"Validation Accuracy: {val_acc:.4f}")
 
     for g in range(G):
-        obs = reset_env_with_goal(env, seed, goal_color=GOAL_COLOR)
+        obs = reset_env(env, seed, profile=PROFILE, goal_color=GOAL_COLOR)
 
         trajectory = []
         episode_reward = 0.0
+        rollout_names = []
 
         for step in range(MAX_STEPS):
             ego_img = obs["image"]
@@ -225,7 +248,7 @@ for episode in range(EPISODES):
                 rollout = select_rollout_action(active_model, ego_img)
                 if rollout is None:
                     break
-                action_idx, action_log_prob, input_ids, pixel_values = rollout
+                minigrid_id, pidx, action_name, action_log_prob, input_ids, pixel_values = rollout
 
                 if action_single_ids is not None:
                     ref_action_logits = score_action_logits(
@@ -237,18 +260,19 @@ for episode in range(EPISODES):
                         action_single_ids=action_single_ids,
                     )
                     ref_probs = F.softmax(ref_action_logits, dim=-1)
-                    ref_log_prob = torch.log(ref_probs[action_idx] + 1e-12)
+                    ref_log_prob = torch.log(ref_probs[pidx] + 1e-12)
                 else:
                     ref_log_prob = seq_logprob_given_prefix(
-                        ref_model, tokenizer, input_ids, pixel_values, action_ids_list[action_idx]
+                        ref_model, tokenizer, input_ids, pixel_values, action_ids_list[pidx]
                     )
 
-            obs, reward, terminated, truncated, _ = env.step(action_idx)
+            obs, reward, terminated, truncated, _ = env.step(minigrid_id)
+            rollout_names.append(action_name)
             
             trajectory.append({
                 "input_ids": input_ids,
                 "pixel_values": pixel_values,
-                "action_idx": action_idx,
+                "action_idx": pidx,
                 "old_log_prob": action_log_prob,
                 "ref_log_prob": ref_log_prob
             })
@@ -259,21 +283,35 @@ for episode in range(EPISODES):
                 
         group_trajectories.append(trajectory)
         group_returns.append(episode_reward)
+        group_action_names.extend(rollout_names)
 
     returns_tensor = torch.tensor(group_returns, dtype=torch.float32).to(DEVICE)
     mean_return = returns_tensor.mean()
+    raw_std = float(returns_tensor.std(unbiased=False).item()) if len(group_returns) > 1 else 0.0
     std_return = returns_tensor.std() + 1e-8
     advantages = (returns_tensor - mean_return) / std_return
+    p_std_zero = 1.0 if raw_std < 1e-8 else 0.0
+    n_names = max(len(group_action_names), 1)
+    pickup_frac = group_action_names.count("pickup") / n_names
+    toggle_frac = group_action_names.count("toggle") / n_names
 
     success_rate = (returns_tensor > 0).float().mean().item()
     if USE_WANDB:
         wandb.log({
             "train/mean_return": mean_return.item(),
             "train/success_rate": success_rate,
+            "train/group_return_std": raw_std,
+            "train/p_std_zero": p_std_zero,
+            "train/pickup_frac": pickup_frac,
+            "train/toggle_frac": toggle_frac,
             "episode": episode
         })
 
-    print(f"Ep {episode+1}/{EPISODES} | Mean Return: {mean_return.item():.3f} | Success: {success_rate*100:.1f}%")
+    print(
+        f"Ep {episode+1}/{EPISODES} | Mean Return: {mean_return.item():.3f} | "
+        f"Success: {success_rate*100:.1f}% | P(std=0): {p_std_zero:.0f} | "
+        f"pickup={pickup_frac:.3f} toggle={toggle_frac:.3f}"
+    )
 
     flat_input_ids = []
     flat_pixel_values = []
@@ -343,7 +381,17 @@ for episode in range(EPISODES):
     if (episode + 1) % CHECKPOINT_INTERVAL == 0:
         save_checkpoint(f"{OUTPUT_DIR}/episode-{episode+1}")
 
-val_acc = evaluate_action_accuracy(active_model, tokenizer, image_processor, val_ds, num_samples=100, seed=SEED, device=DEVICE)
+val_acc = evaluate_action_accuracy(
+    active_model,
+    tokenizer,
+    image_processor,
+    val_ds,
+    num_samples=100,
+    seed=SEED,
+    device=DEVICE,
+    action_names=ACTION_NAMES_P,
+    action_to_id=ACTION_TO_ID_P,
+)
 print(f"Validation Accuracy: {val_acc:.4f}")
 
 save_checkpoint(OUTPUT_DIR)

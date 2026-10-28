@@ -104,11 +104,12 @@ def _select_stratified_val_episodes(
     return val_episodes
 
 
-def action_distribution(actions):
+def action_distribution(actions, action_names=None):
+    names = list(ACTION_TO_ID if action_names is None else action_names)
     counts = Counter(actions)
     return {
         action: counts.get(action, 0)
-        for action in ACTION_TO_ID
+        for action in names
     }
 
 
@@ -129,7 +130,7 @@ def split_dataset_by_episode(dataset, test_size: float = 0.1, seed: int = 42, ep
     return dataset.select(train_indices), dataset.select(val_indices), val_episodes
 
 
-def majority_action_baseline(train_dataset, eval_dataset):
+def majority_action_baseline(train_dataset, eval_dataset, action_names=None):
     action_counts = Counter(train_dataset["action"])
     majority_action, majority_count = action_counts.most_common(1)[0]
     correct = sum(1 for action in eval_dataset["action"] if action == majority_action)
@@ -138,13 +139,18 @@ def majority_action_baseline(train_dataset, eval_dataset):
         "action": majority_action,
         "train_count": majority_count,
         "accuracy": correct / len(eval_dataset) if len(eval_dataset) else 0.0,
-        "train_distribution": action_distribution(train_dataset["action"]),
-        "eval_distribution": action_distribution(eval_dataset["action"]),
+        "train_distribution": action_distribution(train_dataset["action"], action_names=action_names),
+        "eval_distribution": action_distribution(eval_dataset["action"], action_names=action_names),
     }
 
 
-def parse_action_token_id(token_id: int, action_token_name_by_id: dict[int, str]):
+def parse_action_token_id(
+    token_id: int,
+    action_token_name_by_id: dict[int, str],
+    action_to_id: dict[str, int] | None = None,
+):
     action_name = action_token_name_by_id.get(int(token_id))
     if action_name is None:
         return None, None
-    return action_name, ACTION_TO_ID[action_name]
+    mapping = ACTION_TO_ID if action_to_id is None else action_to_id
+    return action_name, mapping[action_name]

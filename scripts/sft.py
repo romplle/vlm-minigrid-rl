@@ -21,7 +21,6 @@ from vlm_minigrid_rl.experiment_config import (
     DEFAULT_VAL_SAMPLES,
     WANDB_PROJECT,
     dataset_dir_for_profile,
-    env_label,
     sft_adapter_root_for_profile,
 )
 from vlm_minigrid_rl.model_utils import (
@@ -64,7 +63,7 @@ def parse_args():
 
 args = parse_args()
 PROFILE = resolve_profile(args.env_size, args.env_profile, args.env_id)
-experiment_name = env_label(PROFILE.env_size)
+experiment_name = PROFILE.name
 DATASET_PATH = str(
     project_path(args.dataset_path) if args.dataset_path else dataset_dir_for_profile(PROFILE)
 )
@@ -102,7 +101,7 @@ model = model.to(DEVICE)
 
 full_ds = load_from_disk(DATASET_PATH)
 train_ds, val_ds, val_episodes = split_dataset_by_episode(full_ds, test_size=VAL_SPLIT, seed=SEED)
-majority_baseline = majority_action_baseline(train_ds, val_ds)
+majority_baseline = majority_action_baseline(train_ds, val_ds, action_names=PROFILE.action_names)
 
 print(f"Размер train: {len(train_ds)}, Размер val: {len(val_ds)}")
 print(f"Episode-level split: train episodes={len(set(train_ds['episode_id']))}, val episodes={len(val_episodes)}")
@@ -125,7 +124,15 @@ model.train()
 
 print("\n[Baseline] Валидация до начала обучения...")
 baseline_acc = evaluate_action_accuracy(
-    model, tokenizer, image_processor, val_ds, num_samples=VAL_SAMPLES, seed=SEED, device=DEVICE
+    model,
+    tokenizer,
+    image_processor,
+    val_ds,
+    num_samples=VAL_SAMPLES,
+    seed=SEED,
+    device=DEVICE,
+    action_names=PROFILE.action_names,
+    action_to_id=dict(PROFILE.action_to_id),
 )
 print(f"Baseline Accuracy: {baseline_acc:.4f}")
 if USE_WANDB:
@@ -173,7 +180,15 @@ for epoch in range(EPOCHS):
 
     print(f"Запуск оценки Accuracy (Epoch {epoch + 1})...")
     val_acc = evaluate_action_accuracy(
-        model, tokenizer, image_processor, val_ds, num_samples=VAL_SAMPLES, seed=SEED, device=DEVICE
+        model,
+        tokenizer,
+        image_processor,
+        val_ds,
+        num_samples=VAL_SAMPLES,
+        seed=SEED,
+        device=DEVICE,
+        action_names=PROFILE.action_names,
+        action_to_id=dict(PROFILE.action_to_id),
     )
     print(f"Epoch {epoch + 1} Validation Accuracy: {val_acc:.4f}")
 

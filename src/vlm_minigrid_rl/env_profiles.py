@@ -18,6 +18,14 @@ from types import MappingProxyType
 from .training_utils import ACTION_NAMES, ACTION_TO_ID, build_navigation_prompt
 
 
+def policy_index(action_name: str, action_names) -> int:
+    names = list(action_names)
+    try:
+        return names.index(action_name)
+    except ValueError as exc:
+        raise ValueError(f"Unknown action {action_name!r} for names {names}") from exc
+
+
 @dataclass(frozen=True)
 class EnvProfile:
     name: str

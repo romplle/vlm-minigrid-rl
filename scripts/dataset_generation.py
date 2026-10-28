@@ -17,7 +17,12 @@ from vlm_minigrid_rl.experiment_config import (
     DEFAULT_TILE_SIZE,
     dataset_dir_for_profile,
 )
-from vlm_minigrid_rl.minigrid_utils import choose_balanced_shortest_path, create_minigrid_env, reset_env_with_goal, turn_balance
+from vlm_minigrid_rl.minigrid_utils import (
+    choose_balanced_shortest_path,
+    create_minigrid_env,
+    reset_env,
+    turn_balance,
+)
 from vlm_minigrid_rl.paths import project_path
 from vlm_minigrid_rl.training_utils import GOAL_COLORS
 
@@ -53,23 +58,24 @@ def main():
 
     data = []
     action_balance = 0
+    skipped = 0
 
     for episode in tqdm(range(args.num_episodes), desc="Генерация траекторий"):
         seed = args.seed_base + episode
-        obs = reset_env_with_goal(wrapper, seed, goal_color=args.goal_color)
+        obs = reset_env(wrapper, seed, profile=profile, goal_color=args.goal_color)
         unwrapped = wrapper.unwrapped
 
         path = choose_balanced_shortest_path(wrapper, action_balance)
         action_balance += turn_balance(path)
         if not path:
+            skipped += 1
             continue
 
         global_img = env.render()
 
         for step_idx, action in enumerate(path):
             ego_img = np.asarray(obs["image"], dtype=np.uint8)
-            
-            data.append({
+            row = {
                 "ego_image": Image.fromarray(ego_img),
                 "global_image": Image.fromarray(np.asarray(global_img, dtype=np.uint8)),
                 "prompt": prompt,
@@ -78,9 +84,10 @@ def main():
                 "episode_id": int(episode),
                 "step": int(step_idx),
                 "env_size": int(env_size),
-                "agent_pos": str(unwrapped.agent_pos),
+                "agent_pos": str(tuple(int(v) for v in unwrapped.agent_pos)),
                 "agent_dir": int(unwrapped.agent_dir),
-            })
+            }
+            data.append(row)
 
             obs, _, terminated, truncated, _ = wrapper.step(action)
             global_img = env.render()
@@ -91,9 +98,9 @@ def main():
     wrapper.close()
     env.close()
 
-    print(f"Собрано {len(data)} примеров")
+    print(f"Собрано {len(data)} примеров (skipped empty paths={skipped})")
 
-    features = Features({
+    features = {
         "ego_image": HFImage(),
         "global_image": HFImage(),
         "prompt": Value("string"),
@@ -104,10 +111,10 @@ def main():
         "env_size": Value("int64"),
         "agent_pos": Value("string"),
         "agent_dir": Value("int64"),
-    })
+    }
 
     dataset = Dataset.from_list(data)
-    dataset = dataset.cast(features)
+    dataset = dataset.cast(Features(features))
 
     tmp_path = save_path.with_name(f"{save_path.name}.tmp")
     if tmp_path.exists():
