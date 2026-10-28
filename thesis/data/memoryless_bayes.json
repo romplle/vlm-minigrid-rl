@@ -1,0 +1,394 @@
+{
+  "note": "Visible-goal steps use omniscient BFS once vis_mask contains the goal (on Empty: turn and walk to the seen cell). Walls use the occupancy grid, which is present in the ego view. This is not a VLM and is not identified with GRPO weights. Caps are C1 12/40, not slim 16/38.",
+  "config": {
+    "prior_n": 2000,
+    "prior_seed": 42,
+    "eval_episodes": 250,
+    "eval_seeds": [
+      42,
+      123,
+      456
+    ],
+    "max_steps": {
+      "8": 12,
+      "16": 40
+    },
+    "goal_color": "green"
+  },
+  "by_env": {
+    "8": {
+      "max_steps": 12,
+      "prior": {
+        "env_size": 8,
+        "n": 2000,
+        "seed": 42,
+        "counts": {
+          "visible": 951,
+          "facing_miss": 995,
+          "far": 54
+        },
+        "rates": {
+          "visible": 0.4755,
+          "facing_miss": 0.4975,
+          "far": 0.027
+        },
+        "n_empty": 1049,
+        "p_far_given_empty": 0.05147759771210677,
+        "not_far_rate": 0.973
+      },
+      "spin": {
+        "mean": 98.4,
+        "sd": 1.1999999999999957,
+        "n": 3,
+        "rates": [
+          99.6,
+          98.4,
+          97.2
+        ]
+      },
+      "search": {
+        "mean": 71.46666666666667,
+        "sd": 3.2331615074619093,
+        "n": 3,
+        "rates": [
+          69.6,
+          69.6,
+          75.2
+        ]
+      },
+      "bayes_empty_action": "turn",
+      "evals": {
+        "spin": [
+          {
+            "env_size": 8,
+            "policy": "spin",
+            "episodes": 250,
+            "seed": 42,
+            "max_steps": 12,
+            "successes": 249,
+            "success_rate": 99.6,
+            "by_stratum": {
+              "visible": {
+                "n": 123,
+                "success_rate": 100.0
+              },
+              "facing_miss": {
+                "n": 126,
+                "success_rate": 100.0
+              },
+              "far": {
+                "n": 1,
+                "success_rate": 0.0
+              }
+            }
+          },
+          {
+            "env_size": 8,
+            "policy": "spin",
+            "episodes": 250,
+            "seed": 123,
+            "max_steps": 12,
+            "successes": 246,
+            "success_rate": 98.4,
+            "by_stratum": {
+              "visible": {
+                "n": 122,
+                "success_rate": 100.0
+              },
+              "facing_miss": {
+                "n": 124,
+                "success_rate": 100.0
+              },
+              "far": {
+                "n": 4,
+                "success_rate": 0.0
+              }
+            }
+          },
+          {
+            "env_size": 8,
+            "policy": "spin",
+            "episodes": 250,
+            "seed": 456,
+            "max_steps": 12,
+            "successes": 243,
+            "success_rate": 97.2,
+            "by_stratum": {
+              "visible": {
+                "n": 121,
+                "success_rate": 100.0
+              },
+              "facing_miss": {
+                "n": 122,
+                "success_rate": 100.0
+              },
+              "far": {
+                "n": 7,
+                "success_rate": 0.0
+              }
+            }
+          }
+        ],
+        "search": [
+          {
+            "env_size": 8,
+            "policy": "search",
+            "episodes": 250,
+            "seed": 42,
+            "max_steps": 12,
+            "successes": 174,
+            "success_rate": 69.6,
+            "by_stratum": {
+              "visible": {
+                "n": 123,
+                "success_rate": 100.0
+              },
+              "facing_miss": {
+                "n": 126,
+                "success_rate": 40.476190476190474
+              },
+              "far": {
+                "n": 1,
+                "success_rate": 0.0
+              }
+            }
+          },
+          {
+            "env_size": 8,
+            "policy": "search",
+            "episodes": 250,
+            "seed": 123,
+            "max_steps": 12,
+            "successes": 174,
+            "success_rate": 69.6,
+            "by_stratum": {
+              "visible": {
+                "n": 122,
+                "success_rate": 100.0
+              },
+              "facing_miss": {
+                "n": 124,
+                "success_rate": 41.935483870967744
+              },
+              "far": {
+                "n": 4,
+                "success_rate": 0.0
+              }
+            }
+          },
+          {
+            "env_size": 8,
+            "policy": "search",
+            "episodes": 250,
+            "seed": 456,
+            "max_steps": 12,
+            "successes": 188,
+            "success_rate": 75.2,
+            "by_stratum": {
+              "visible": {
+                "n": 121,
+                "success_rate": 100.0
+              },
+              "facing_miss": {
+                "n": 122,
+                "success_rate": 53.278688524590166
+              },
+              "far": {
+                "n": 7,
+                "success_rate": 28.571428571428573
+              }
+            }
+          }
+        ]
+      }
+    },
+    "16": {
+      "max_steps": 40,
+      "prior": {
+        "env_size": 16,
+        "n": 2000,
+        "seed": 42,
+        "counts": {
+          "visible": 348,
+          "facing_miss": 499,
+          "far": 1153
+        },
+        "rates": {
+          "visible": 0.174,
+          "facing_miss": 0.2495,
+          "far": 0.5765
+        },
+        "n_empty": 1652,
+        "p_far_given_empty": 0.6979418886198547,
+        "not_far_rate": 0.4235
+      },
+      "spin": {
+        "mean": 44.4,
+        "sd": 2.8000000000000007,
+        "n": 3,
+        "rates": [
+          43.2,
+          42.4,
+          47.6
+        ]
+      },
+      "search": {
+        "mean": 63.86666666666667,
+        "sd": 2.20302821891444,
+        "n": 3,
+        "rates": [
+          64.0,
+          66.0,
+          61.6
+        ]
+      },
+      "bayes_empty_action": "forward",
+      "evals": {
+        "spin": [
+          {
+            "env_size": 16,
+            "policy": "spin",
+            "episodes": 250,
+            "seed": 42,
+            "max_steps": 40,
+            "successes": 108,
+            "success_rate": 43.2,
+            "by_stratum": {
+              "visible": {
+                "n": 41,
+                "success_rate": 100.0
+              },
+              "facing_miss": {
+                "n": 67,
+                "success_rate": 100.0
+              },
+              "far": {
+                "n": 142,
+                "success_rate": 0.0
+              }
+            }
+          },
+          {
+            "env_size": 16,
+            "policy": "spin",
+            "episodes": 250,
+            "seed": 123,
+            "max_steps": 40,
+            "successes": 106,
+            "success_rate": 42.4,
+            "by_stratum": {
+              "visible": {
+                "n": 43,
+                "success_rate": 100.0
+              },
+              "facing_miss": {
+                "n": 63,
+                "success_rate": 100.0
+              },
+              "far": {
+                "n": 144,
+                "success_rate": 0.0
+              }
+            }
+          },
+          {
+            "env_size": 16,
+            "policy": "spin",
+            "episodes": 250,
+            "seed": 456,
+            "max_steps": 40,
+            "successes": 119,
+            "success_rate": 47.6,
+            "by_stratum": {
+              "visible": {
+                "n": 57,
+                "success_rate": 100.0
+              },
+              "facing_miss": {
+                "n": 62,
+                "success_rate": 100.0
+              },
+              "far": {
+                "n": 131,
+                "success_rate": 0.0
+              }
+            }
+          }
+        ],
+        "search": [
+          {
+            "env_size": 16,
+            "policy": "search",
+            "episodes": 250,
+            "seed": 42,
+            "max_steps": 40,
+            "successes": 160,
+            "success_rate": 64.0,
+            "by_stratum": {
+              "visible": {
+                "n": 41,
+                "success_rate": 100.0
+              },
+              "facing_miss": {
+                "n": 67,
+                "success_rate": 43.28358208955224
+              },
+              "far": {
+                "n": 142,
+                "success_rate": 63.38028169014085
+              }
+            }
+          },
+          {
+            "env_size": 16,
+            "policy": "search",
+            "episodes": 250,
+            "seed": 123,
+            "max_steps": 40,
+            "successes": 165,
+            "success_rate": 66.0,
+            "by_stratum": {
+              "visible": {
+                "n": 43,
+                "success_rate": 100.0
+              },
+              "facing_miss": {
+                "n": 63,
+                "success_rate": 36.507936507936506
+              },
+              "far": {
+                "n": 144,
+                "success_rate": 68.75
+              }
+            }
+          },
+          {
+            "env_size": 16,
+            "policy": "search",
+            "episodes": 250,
+            "seed": 456,
+            "max_steps": 40,
+            "successes": 154,
+            "success_rate": 61.6,
+            "by_stratum": {
+              "visible": {
+                "n": 57,
+                "success_rate": 100.0
+              },
+              "facing_miss": {
+                "n": 62,
+                "success_rate": 37.096774193548384
+              },
+              "far": {
+                "n": 131,
+                "success_rate": 56.48854961832061
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "verdict": "BAYES_FLIP",
+  "reason": "empty-FOV Bayes: 8x8 turn, 16x16 forward"
+}

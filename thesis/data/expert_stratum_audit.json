@@ -1,0 +1,114 @@
+{
+  "8": {
+    "env_size": 8,
+    "n_episodes": 1000,
+    "seed_base": 42,
+    "skipped": 0,
+    "n_ok": 1000,
+    "n_steps": 5280,
+    "n_empty_steps": 887,
+    "start_counts": {
+      "facing_miss": 496,
+      "visible": 482,
+      "far": 22
+    },
+    "start_rates": {
+      "facing_miss": 0.496,
+      "visible": 0.482,
+      "far": 0.022
+    },
+    "p_far_given_empty_start": 0.0425,
+    "expert_first_action_on_empty_start": {
+      "facing_miss": {
+        "n": 496,
+        "share": {
+          "left": 0.4315,
+          "right": 0.4577,
+          "forward": 0.1109
+        }
+      },
+      "far": {
+        "n": 22,
+        "share": {
+          "left": 0.4545,
+          "right": 0.2273,
+          "forward": 0.3182
+        }
+      }
+    },
+    "expert_actions_on_empty_fov_steps": {
+      "facing_miss": {
+        "n": 843,
+        "share": {
+          "left": 0.3405,
+          "right": 0.3523,
+          "forward": 0.3072
+        }
+      },
+      "far": {
+        "n": 44,
+        "share": {
+          "left": 0.2273,
+          "right": 0.1136,
+          "forward": 0.6591
+        }
+      }
+    }
+  },
+  "16": {
+    "env_size": 16,
+    "n_episodes": 1000,
+    "seed_base": 42,
+    "skipped": 0,
+    "n_ok": 1000,
+    "n_steps": 10530,
+    "n_empty_steps": 4629,
+    "start_counts": {
+      "far": 560,
+      "facing_miss": 252,
+      "visible": 188
+    },
+    "start_rates": {
+      "far": 0.56,
+      "facing_miss": 0.252,
+      "visible": 0.188
+    },
+    "p_far_given_empty_start": 0.6897,
+    "expert_first_action_on_empty_start": {
+      "facing_miss": {
+        "n": 252,
+        "share": {
+          "left": 0.4246,
+          "right": 0.377,
+          "forward": 0.1984
+        }
+      },
+      "far": {
+        "n": 560,
+        "share": {
+          "left": 0.2661,
+          "right": 0.2696,
+          "forward": 0.4643
+        }
+      }
+    },
+    "expert_actions_on_empty_fov_steps": {
+      "facing_miss": {
+        "n": 1111,
+        "share": {
+          "left": 0.2007,
+          "right": 0.2061,
+          "forward": 0.5932
+        }
+      },
+      "far": {
+        "n": 3518,
+        "share": {
+          "left": 0.079,
+          "right": 0.0804,
+          "forward": 0.8405
+        }
+      }
+    }
+  }
+}

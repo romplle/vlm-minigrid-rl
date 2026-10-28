@@ -1,0 +1,50 @@
+{
+  "n_resets": 2000,
+  "8": {
+    "visible": {
+      "n": 951,
+      "mean": 116.54510666519309,
+      "std": 34.932130939952955,
+      "green_frac": 0.02040816326530612,
+      "dark_frac": 0.4166177117534711
+    },
+    "facing_miss": {
+      "n": 995,
+      "mean": 129.03356176788483,
+      "std": 28.603682265928644,
+      "green_frac": 0.0,
+      "dark_frac": 0.24122383681801865
+    },
+    "far": {
+      "n": 54,
+      "mean": 127.68342392532914,
+      "std": 27.667901745548956,
+      "green_frac": 0.0,
+      "dark_frac": 0.2605115179752456
+    }
+  },
+  "16": {
+    "visible": {
+      "n": 348,
+      "mean": 93.80484192946861,
+      "std": 28.72928048824442,
+      "green_frac": 0.02040816326530612,
+      "dark_frac": 0.7414786159614707
+    },
+    "facing_miss": {
+      "n": 499,
+      "mean": 99.77178202841229,
+      "std": 26.690321924213418,
+      "green_frac": 0.0,
+      "dark_frac": 0.6592493021757803
+    },
+    "far": {
+      "n": 1153,
+      "mean": 103.8017934450148,
+      "std": 27.683327108285578,
+      "green_frac": 0.0,
+      "dark_frac": 0.6016777059235446
+    }
+  },
+  "note": "Simple RGB summaries of the 7x7 ego view. Not a trained classifier. If facing_miss and far differ on dark_frac/mean, observations are not identical."
+}
