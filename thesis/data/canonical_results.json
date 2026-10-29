@@ -1,0 +1,343 @@
+{
+  "protocol": {
+    "eval_episodes": 250,
+    "eval_seeds": [42, 123, 456],
+    "horizon_8": 12,
+    "horizon_16": 40,
+    "decoder": "generate max_new_tokens=1",
+    "note": "C1/D/far-honest frozen at old caps 12/40. Do not mix with slim 16/38."
+  },
+  "handoff_8x8_in_domain": {
+    "source": "runs/2026-07-handoff-empty/8x8/summary.json",
+    "by_epoch": {
+      "1": {"sft": 74.8, "grpo": 88.93, "delta": 14.13},
+      "2": {"sft": 91.33, "grpo": 96.27, "delta": 4.93},
+      "3": {"sft": 93.47, "grpo": 96.8, "delta": 3.33},
+      "5": {"sft": 95.07, "grpo": 98.27, "delta": 3.2},
+      "7": {"sft": 94.67, "grpo": 98.0, "delta": 3.33},
+      "9": {"sft": 97.87, "grpo": 98.53, "delta": 0.66}
+    },
+    "e9_three_train_seed": {
+      "source": "RESEARCH.md / 2026-08-grpo-trainseed-8x8",
+      "sft": 97.87,
+      "grpo": 98.27,
+      "delta": 0.40,
+      "delta_sd": 0.23
+    }
+  },
+  "greedy_argmax3_8x8": {
+    "source": "runs/2026-08-greedy-8x8/summary.json",
+    "note": "C2 decoder diagnostic. In-domain Empty 8x8 @12, 250 x 3 eval seeds, GRPO train seed 42 / episode-100, SFT root sft_adapter_8x8_bs32_e10. argmax3 = select_action_argmax3 (non-batched read of the last position). Diagnostic only: the canon of the paper is generate (G1). No OOD cells were measured under argmax3.",
+    "e9": {
+      "sft_sampled": 97.87,
+      "sft_sampled_sd": 0.50,
+      "sft_greedy": 98.27,
+      "sft_greedy_sd": 0.19,
+      "grpo_sampled": 98.53,
+      "grpo_sampled_sd": 0.75,
+      "grpo_greedy": 96.27,
+      "grpo_greedy_sd": 0.50,
+      "delta_sampled": 0.67,
+      "delta_greedy": -2.00,
+      "delta_sampled_note": "Same quantity as handoff_8x8_in_domain.by_epoch.9.delta = 0.66; unrounded 0.6667, the two blocks round differently.",
+      "sft_greedy_note": "98.27 here is SFT under greedy. Numerically equal by rounding to handoff_8x8_in_domain.e9_three_train_seed.grpo = 98.27, which is a different quantity (GRPO in-domain generate over 3 train seeds)."
+    },
+    "best_greedy_overall": {"sft_epoch": 2, "grpo_greedy": 99.07},
+    "f3": {"verdict": "policy_improvement", "slope_sampled": -13.47, "slope_greedy": -12.13},
+    "d_arm_defect": {
+      "source": "runs/2026-08-ttaug-ood-8x8/summary.json",
+      "status": "invalid_measurement",
+      "note": "Arms S1 and T8 of experiment D scored through score_action_logits_batched with a text-only attention mask. That branch reads position T_text-1 = 63 of the 49 + 64 = 113 combined sequence (15th prompt token) instead of the final 'Assistant:' position, because VisionLanguageModel.forward only strips the 49-token image prefix in the targets branch. Signature: S1 is bit-identical for SFT and GRPO in every suite. GRPO PPO-ratio and KL pass no mask, so they read the last position and are unaffected; all 8 copies of grpo.py were checked. The HURTS_MORE verdict for T8 is withdrawn. M8 (2026-08-ttaug-m8-8x8) votes through generate and is unaffected.",
+      "s1_in_domain": {"sft": 4.4, "grpo": 4.4},
+      "t8_in_domain": {"sft": 0.0, "grpo": 0.0},
+      "s1_transfer": {"sft": 12.0, "grpo": 12.0}
+    }
+  },
+  "c1_ood_e9_trainseed": {
+    "source": "runs/2026-09-ood-trainseed-e9-8x8/summary.json",
+    "note": "SFT e9 shared. Train seed 42 reused from C1 (eval-seed replica). Seeds 123/456 eval-only, caps 40/12, 250×3. Verdict HURTS_REPLICATED. Do not mix with slim 16/38.",
+    "verdict": "HURTS_REPLICATED",
+    "sft": {"transfer": 57.47, "goal_red": 17.87},
+    "transfer": {
+      "grpo": 45.82,
+      "delta": -11.64,
+      "delta_sd": 0.98,
+      "n_train_negative": 3,
+      "by_train_seed": {
+        "42": {"grpo": 45.07, "delta": -12.40, "delta_sd": 4.80},
+        "123": {"grpo": 46.93, "delta": -10.53, "delta_sd": 2.57},
+        "456": {"grpo": 45.47, "delta": -12.00, "delta_sd": 4.54}
+      }
+    },
+    "goal_red": {
+      "grpo": 3.20,
+      "delta": -14.67,
+      "delta_sd": 0.96,
+      "n_train_negative": 3,
+      "by_train_seed": {
+        "42": {"grpo": 2.40, "delta": -15.47, "delta_sd": 1.97},
+        "123": {"grpo": 4.27, "delta": -13.60, "delta_sd": 2.50},
+        "456": {"grpo": 2.93, "delta": -14.93, "delta_sd": 3.06}
+      }
+    }
+  },
+  "c1_ood_e1_e5_trainseed": {
+    "sources": [
+      "runs/2026-09-ood-trainseed-e1-8x8/summary.json",
+      "runs/2026-09-ood-trainseed-e5-8x8/summary.json"
+    ],
+    "note": "Sign only. Seed 42 is C1 reuse, train at unpinned gym 256. Seeds 123/456 trained at pin max_steps 12. Do not substitute the across-seed means into the C1 ladder.",
+    "verdict": "HURTS_REPLICATED",
+    "cells_negative": "18/18",
+    "e1": {
+      "transfer_delta_mean": -6.27,
+      "transfer_delta_sd": 1.76,
+      "goal_delta_mean": -18.13,
+      "goal_delta_sd": 5.78,
+      "by_train_seed": {
+        "42": {"transfer_delta": -8.27, "transfer_delta_sd": 1.22, "goal_delta": -21.33, "goal_delta_sd": 1.15, "train_max_steps": 256},
+        "123": {"transfer_delta": -4.93, "transfer_delta_sd": 2.44, "goal_delta": -21.60, "goal_delta_sd": 2.62, "train_max_steps": 12},
+        "456": {"transfer_delta": -5.60, "transfer_delta_sd": 2.23, "goal_delta": -11.47, "goal_delta_sd": 1.51, "train_max_steps": 12}
+      }
+    },
+    "e5": {
+      "transfer_delta_mean": -12.27,
+      "transfer_delta_sd": 2.02,
+      "goal_delta_mean": -33.60,
+      "goal_delta_sd": 2.22,
+      "by_train_seed": {
+        "42": {"transfer_delta": -14.53, "transfer_delta_sd": 2.20, "goal_delta": -36.13, "goal_delta_sd": 3.03, "train_max_steps": 256},
+        "123": {"transfer_delta": -10.67, "transfer_delta_sd": 2.34, "goal_delta": -32.00, "goal_delta_sd": 2.62, "train_max_steps": 12},
+        "456": {"transfer_delta": -11.60, "transfer_delta_sd": 2.62, "goal_delta": -32.67, "goal_delta_sd": 3.33, "train_max_steps": 12}
+      }
+    }
+  },
+  "sft_goalred_visible": {
+    "source": "runs/2026-09-sft-goalred-visible/summary.json",
+    "verdict": "VISIBLE_CARRIES",
+    "suite_ok": true,
+    "sft_e9_mean": 17.87,
+    "grpo_e9_mean": 2.40,
+    "gate_pp": 3.0,
+    "episodes": 250,
+    "eval_max_steps": 12,
+    "method": "G1",
+    "note": "e9 minus e5, unweighted mean of three eval seeds. Does not replace c1_ood.goal_red aggregates.",
+    "visible": {"e5": 48.64, "e9": 21.32, "delta": -27.32, "contribution_pp": -13.33, "mean_n": 122},
+    "facing_miss": {"e5": 33.07, "e9": 15.08, "delta": -17.99, "contribution_pp": -8.92, "mean_n": 124},
+    "far": {"e5": 8.33, "e9": 0.00, "delta": -8.33, "contribution_pp": -0.13, "mean_n": 4}
+  },
+  "c1_ood": {
+    "source": "runs/2026-08-ood-multiseed-8x8/summary.json",
+    "transfer": {
+      "1": {"sft": 49.73, "grpo": 41.47, "delta": -8.27, "delta_sd": 1.22},
+      "5": {"sft": 59.87, "grpo": 45.33, "delta": -14.53, "delta_sd": 2.20},
+      "9": {"sft": 57.47, "grpo": 45.07, "delta": -12.40, "delta_sd": 4.80}
+    },
+    "goal_red": {
+      "1": {"sft": 30.93, "grpo": 9.60, "delta": -21.33, "delta_sd": 1.15},
+      "5": {"sft": 40.27, "grpo": 4.13, "delta": -36.13, "delta_sd": 3.03},
+      "9": {"sft": 17.87, "grpo": 2.40, "delta": -15.47, "delta_sd": 1.97}
+    }
+  },
+  "geometry_e9_transfer": {
+    "source": "docs/experiments/2026-08-c1-geometry-8x8/README.md",
+    "visible": {"sft": 99.42, "grpo": 95.88, "n_range": "41-57"},
+    "facing_miss": {"sft": 95.22, "grpo": 95.82, "n_range": "62-67"},
+    "far": {"sft": 25.81, "grpo": 4.61, "n_range": "131-144"},
+    "failed_empty_spin": {"sft": "20-26", "grpo": "71-81"}
+  },
+  "see_far": {
+    "source": "docs/experiments/2026-08-c1-search-8x8/README.md",
+    "sft_g1": 25.81,
+    "sft_see": 95.09,
+    "grpo_g1": 4.61,
+    "grpo_see": 87.54,
+    "oracle_steps": 5.4
+  },
+  "see_paint_e9_trainseed": {
+    "source": "runs/2026-09-c1-see-paint-trainseed/summary.json",
+    "note": "Eval-only. Caps 12/40. Seed 42 reused from frozen C1 SEE/PAINT JSON. SFT skipped. 250×3. Verdict MECHANISM_REPLICATED. Do not mix with slim 16/38.",
+    "verdict": "MECHANISM_REPLICATED",
+    "see_axis": "SEE_REPLICATED",
+    "color_axis": "COLOR_REPLICATED",
+    "see": {
+      "scientific_tags": {"42": "SEARCH_PARTIAL", "123": "SEARCH_PARTIAL", "456": "SEARCH_PARTIAL"},
+      "machine_tags": {"42": "INCONCLUSIVE", "123": "OK", "456": "OK"},
+      "by_train_seed": {
+        "42": {"g1_overall": 45.07, "g1_far": 4.61, "see_far": 87.54, "delta_far": 82.93},
+        "123": {"g1_overall": 46.93, "g1_far": 5.51, "see_far": 93.74, "delta_far": 88.23},
+        "456": {"g1_overall": 45.47, "g1_far": 4.62, "see_far": 77.01, "delta_far": 72.40}
+      }
+    },
+    "paint": {
+      "tags": {"42": "COLOR_RECOVERS", "123": "COLOR_RECOVERS", "456": "COLOR_RECOVERS"},
+      "floors": {"42": 93.53, "123": 93.13, "456": 93.13},
+      "by_train_seed": {
+        "42": {"g1": 2.40, "paint": 97.73, "delta": 95.33},
+        "123": {"g1": 4.27, "paint": 97.60, "delta": 93.33},
+        "456": {"g1": 2.93, "paint": 98.13, "delta": 95.20}
+      }
+    }
+  },
+  "paint": {
+    "source": "runs/2026-08-c1-goalred-8x8/summary.json",
+    "g1_sft": 17.87,
+    "g1_grpo": 2.40,
+    "paint_sft": 96.80,
+    "paint_grpo": 97.73
+  },
+  "factors": {
+    "horizon8_delta_at_40": -0.13,
+    "prompt_red_green_grpo": 3.33,
+    "prompt_red_red_grpo": 2.40
+  },
+  "probes": {
+    "empty8": {"visible": 0.495, "facing_miss": 0.477, "far": 0.028, "n": 2000},
+    "empty16": {"visible": 0.1865, "facing_miss": 0.26, "far": 0.5535, "n": 2000}
+  },
+  "memoryless_bayes": {
+    "source": "thesis/data/memoryless_bayes.json",
+    "verdict": "BAYES_FLIP",
+    "note": "CPU policies, no VLM. Caps C1 12/40. Prior n=2000 seed 42; success 250x3. Figures use 95% t-interval (df=2) from seed sd, not sample sd whiskers. Not identified with GRPO.",
+    "8": {
+      "max_steps": 12,
+      "p_far_given_empty": 0.0515,
+      "not_far": 0.973,
+      "spin": 98.40,
+      "spin_sd": 1.20,
+      "search": 71.47,
+      "search_sd": 3.23,
+      "bayes": "turn"
+    },
+    "16": {
+      "max_steps": 40,
+      "p_far_given_empty": 0.6979,
+      "not_far": 0.4235,
+      "spin": 44.40,
+      "spin_sd": 2.80,
+      "search": 63.87,
+      "search_sd": 2.20,
+      "bayes": "forward"
+    }
+  },
+  "p_std_zero_stratum": {
+    "source": "thesis/data/p_std_zero_stratum.json",
+    "n_groups": 300,
+    "verdict": "FAR_ALLFAIL_DOMINATES",
+    "verdict_gloss": "Машинный тег: p_fail(far)>p_fail(miss) ∧ CPU-spin far≥0.95. Несущий канал — частота far-групп 12/300; Lu all-fail вторичен (2/12, mixed 10/12). Не читать как «почти все far-группы нулевые на train».",
+    "note": "Join reconstructed C1 e9 GRPO layouts × stdout Success%. p_all_fail = Success 0% = p_std_zero. CPU spin is Lu control (if policy already spin), not VLM. n_far=12/300 pooled; seed 42 far all-fail 0/4.",
+    "join_pooled": {
+      "visible": {
+        "n": 134,
+        "n_all_fail": 0,
+        "n_mixed": 4,
+        "p_all_fail": 0.0,
+        "mean_success": 99.81
+      },
+      "facing_miss": {
+        "n": 154,
+        "n_all_fail": 0,
+        "n_mixed": 28,
+        "p_all_fail": 0.0,
+        "ci": [0.0, 2.43],
+        "mean_success": 98.10
+      },
+      "far": {
+        "n": 12,
+        "n_all_fail": 2,
+        "n_mixed": 10,
+        "p_all_fail": 16.67,
+        "ci": [4.70, 44.80],
+        "mean_success": 35.94
+      }
+    },
+    "cpu_spin_prior": {
+      "facing_miss": {
+        "n": 995,
+        "n_all_fail": 0,
+        "p_all_fail": 0.0,
+        "ci": [0.0, 0.38]
+      },
+      "far": {
+        "n": 54,
+        "n_all_fail": 54,
+        "p_all_fail": 100.0,
+        "ci": [93.36, 100.0]
+      }
+    },
+    "by_train_seed_far": {
+      "42": {"n": 4, "n_all_fail": 0, "mean_success": 46.88},
+      "123": {"n": 3, "n_all_fail": 1, "mean_success": 27.10},
+      "456": {"n": 5, "n_all_fail": 1, "mean_success": 32.50}
+    }
+  },
+  "color_mix": {
+    "source": "runs/2026-08-c1-train-8x8/summary_color.json",
+    "in_domain_sft": 97.87,
+    "in_domain_grpo": 94.40,
+    "goal_red_sft": 17.87,
+    "goal_red_grpo": 54.40,
+    "c1_goal_red_grpo": 2.40
+  },
+  "far_honest": {
+    "source": "runs/2026-08-c1-far-16x16/summary.json",
+    "native_far_sft": 81.69,
+    "native_far_grpo": 73.71,
+    "native_facing_miss_sft": 73.13,
+    "native_facing_miss_grpo": 82.59,
+    "farreset_far_sft": 81.69,
+    "farreset_far_grpo_seed42": 79.58,
+    "farreset_far_sft_3seed": 77.01,
+    "farreset_far_grpo_3seed": 77.94,
+    "native_far_sft_note": "registered cell is eval-seed 42; do not replace with the 3-eval-seed mean",
+    "native_far_grpo_note": "mean 3 F1 train-seed, eval-seed 42; do not subtract from native_far_sft_evalseed.far_mean",
+    "native_far_sft_evalseed": {
+      "source": "runs/2026-09-native16-sft-evalseed/summary.json",
+      "eval_max_steps": 40,
+      "far_by_eval_seed": {"42": 81.69, "123": 79.86, "456": 69.47},
+      "far_mean": 77.01,
+      "far_sd": 6.59,
+      "within_3pp_of_seed42": false,
+      "facing_miss_by_eval_seed": {"42": 73.13, "123": 85.71, "456": 88.71},
+      "note": "SFT only. GRPO 73.71 stays the eval-42 train-seed mean."
+    },
+    "native_far_grpo_evalseed": {
+      "source": "runs/2026-09-native16-grpo-evalseed/summary.json",
+      "verdict": "SIGN_DIFFERS",
+      "reuse_ok": true,
+      "eval_max_steps": 40,
+      "reuse_grpo_far_mean": 73.71,
+      "paired_delta": {"42": -7.98, "123": -2.31, "456": 2.80},
+      "grpo_far_mean_by_eval_seed": {"42": 73.71, "123": 77.55, "456": 72.26},
+      "facing_miss_grpo_mean_by_eval_seed": {"42": 82.59, "123": 87.30, "456": 86.56},
+      "train_seed_sign_vs_sft": {"42": "3/3 below", "123": "2/3 below", "456": "3/3 above"},
+      "unpaired_wilson95_halfwidth_pp": 7.8,
+      "unpaired_wilson95_cell": {"eval_seed": 456, "n_far": 131, "arm": "sft_far"},
+      "paired_interval_available": true,
+      "paired_interval": {
+        "source": "runs/2026-09-native16-far-paired-ci/summary.json",
+        "method": "percentile bootstrap, 10000 resamples, seed 0",
+        "phrase_456": "COVERS_ZERO_POINT_ABOVE",
+        "withdraw_sign_differs": false,
+        "by_eval_seed": {
+          "42": {"point": -7.98, "lo": -15.26, "hi": -0.47, "n_far": 142, "source": "frozen_bits"},
+          "123": {"point": -2.31, "lo": -9.03, "hi": 4.63, "n_far": 144},
+          "456": {"point": 2.80, "lo": -5.60, "hi": 11.45, "n_far": 131}
+        }
+      },
+      "note": "Delta is the point estimate of mean GRPO far minus SFT far on the same eval seed. The paired 95% interval uses the same far starts. Seed 42 is entirely below zero. Eval seeds 123 and 456 cover zero; on 456 the point stays positive. The GRPO re-run reproduced the published points because the eval seed was the same. Do not average the three deltas or the three intervals. Do not replace native_far_grpo 73.71 or subtract it from far_mean 77.01. Verdict SIGN_DIFFERS stays the point-estimate tag."
+    },
+    "spin_strata_16x16_cap40": {
+      "source": "thesis/data/memoryless_bayes.json",
+      "visible": 100.0,
+      "facing_miss": 100.0,
+      "far": 0.0,
+      "identical_on_eval_seeds": [42, 123, 456],
+      "grpo_transfer_e9": {"visible": 95.88, "facing_miss": 95.82, "far": 4.61},
+      "note": "Aggregate GRPO 45.07 vs spin 44.4 is a cancellation, not policy identity."
+    },
+    "c1_far_sft": 25.81,
+    "c1_far_grpo": 4.61
+  }
+}
